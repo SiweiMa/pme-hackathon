@@ -271,24 +271,56 @@ $ aws lambda invoke --function-name pwe-hackathon-pme-encrypt --payload '{}' /de
 
 #### Phase 8: Lambda Federated Connector — Decryption Proxy
 
-Deploy the Athena Federated Connector that acts as the "decryption proxy":
+**Important nuance:** Athena SQL (the engine QuickSight uses) and Athena Spark are two different engines. Athena SQL cannot "see" the decryption configurations inside a Spark session. Therefore, for QuickSight to "Direct Query" PME data on the fly, you must use a Lambda Federated Connector as a translation layer that presents the data to Athena SQL in a way it can understand.
 
-- Use AWS-provided Athena connector template with Hadoop PME libraries.
-- The connector reads PME files from S3, decrypts in its own RAM using KMS keys.
-- Configure connector IAM execution role with `kms:Decrypt` on the relevant CMKs.
-- Register as an Athena federated data source.
-- Terraform resource in `federated.tf`.
+**The architecture to achieve this:**
 
-**Decryption flow (what happens when a query hits the connector):**
+##### 1. The "Semantic" Bridge: Glue Data Catalog
 
-1. Athena SQL sends the query to the Lambda connector via Federated Query.
-2. Lambda reads the PME Parquet footer → finds wrapped DEKs for each column group.
-3. Lambda calls KMS to unwrap DEKs — IAM execution role determines which keys succeed.
-4. If `kms:Decrypt` is granted → column decrypted in RAM. If denied → column returns NULL.
-5. Decrypted rows returned to Athena SQL → forwarded to QuickSight.
-6. Lambda memory purged — no decrypted data persisted.
+You don't store the decrypted files, but you **do** store the metadata (the table definition) in the Glue Data Catalog.
 
-**RBAC approach:** Deploy multiple connectors (one per role) or use a single connector with the broadest access and control column visibility via QuickSight row/column-level security.
+- In Spark: define an external table pointing to the PME-encrypted S3 path. Include the PME decryption configurations in the Spark session metadata.
+- **The problem:** If QuickSight queries this table via Athena SQL, the query will fail because Athena SQL doesn't know how to handle the Parquet encryption footers.
+
+##### 2. The Solution: The "Decryption Proxy" View
+
+To make this work "on the fly" for QuickSight, use a Lambda-based Federated Query:
+
+1. **Define the table in Spark:** Register the PME-encrypted data as a table in the Glue Catalog using the Athena Spark notebook.
+2. **Deploy a Lambda Federated Connector:** Athena has a Federated Query feature. Deploy a Lambda function (AWS provides templates) that uses the Spark/Hadoop libraries to read the PME data and decrypt it in memory.
+3. **Create the Athena SQL view:**
+   ```sql
+   CREATE VIEW "decrypted_pme_view" AS
+   SELECT * FROM "lambda_connector"."database"."pme_table";
+   ```
+4. **Connect QuickSight:** QuickSight queries the view. When the view is triggered, the Lambda connector uses the KMS keys to decrypt the Parquet blocks in memory and passes the results back to Athena, then to QuickSight.
+
+##### Why this fits the "No Storage" requirement
+
+- **In-Memory Decryption:** The data is decrypted in the Lambda's RAM (the "on the fly" part).
+- **No Intermediate Files:** No unencrypted `.parquet` or `.csv` files are ever written to S3.
+- **Transient Access:** Once the QuickSight dashboard finishes loading, the decrypted data is purged from the Lambda's memory.
+
+##### Security Implementation
+
+| Component | Requirement |
+|-----------|------------|
+| KMS Policy | Must allow the `AthenaFederationLambdaRole` to `kms:Decrypt` |
+| QuickSight | Connects via Direct Query to the Athena View |
+| S3 | Files remain PME-encrypted at rest |
+
+##### Data Flow Summary
+
+```
+S3 (Encrypted)
+  → Lambda Connector (Decrypts in RAM)
+  → Athena View
+  → QuickSight
+```
+
+**RBAC approach:** Deploy 3 connectors (one per role), each with a different IAM execution role that has different `kms:Decrypt` grants. Or use a single connector with the broadest access and control column visibility via QuickSight row/column-level security.
+
+**Terraform:** `federated.tf` for the connector Lambda + IAM roles.
 
 #### Phase 9: Athena SQL View + QuickSight Direct Query
 
