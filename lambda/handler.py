@@ -95,14 +95,27 @@ def _load_csv_from_s3(bucket: str, key: str) -> pa.Table:
 def lambda_handler(event, context):
     """Encrypt CSV from S3 and write PME-encrypted Parquet back to S3.
 
-    Event (all fields optional):
-        input_s3_key     — S3 key of the input CSV (default: raw-data/Hackathon_customer_data.csv)
-        output_filename  — Name for the output Parquet file (default: customer_data_encrypted.parquet)
-        s3_prefix        — S3 prefix for output (default: from S3_PREFIX env var)
+    Supports two invocation modes:
+
+    1. S3 event trigger — automatically extracts bucket/key from the S3 event
+       notification ``Records`` array.
+    2. Manual invoke — accepts ``input_s3_key``, ``output_filename``, and
+       ``s3_prefix`` fields directly.
     """
-    input_key = event.get("input_s3_key", DEFAULT_INPUT_KEY)
-    output_filename = event.get("output_filename", DEFAULT_OUTPUT_FILENAME)
-    s3_prefix = event.get("s3_prefix", S3_PREFIX)
+    if "Records" in event:
+        # S3 event notification format
+        record = event["Records"][0]
+        input_key = record["s3"]["object"]["key"]
+        # Derive output filename: raw-data/customer_data_v2.csv → customer_data_v2.parquet
+        base = input_key.rsplit("/", 1)[-1]          # strip prefix path
+        output_filename = base.rsplit(".", 1)[0] + ".parquet"
+        s3_prefix = S3_PREFIX
+        logger.info("Triggered by S3 event: %s", input_key)
+    else:
+        # Manual / direct invoke format (backwards compatible)
+        input_key = event.get("input_s3_key", DEFAULT_INPUT_KEY)
+        output_filename = event.get("output_filename", DEFAULT_OUTPUT_FILENAME)
+        s3_prefix = event.get("s3_prefix", S3_PREFIX)
 
     logger.info(
         "Starting PME encryption: bucket=%s input=%s output=%s/%s",
