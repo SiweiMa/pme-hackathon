@@ -71,50 +71,61 @@ PyArrow Parquet Modular Encryption (PME) is a C++ feature in PyArrow's native Pa
 ## Project Structure
 
 ```
-pme/
-├── src/
-│   ├── kms_client.py         # AwsKmsClient — bridges PyArrow → AWS KMS
-│   ├── encryption.py         # Write pipeline: encrypt columns → PME Parquet → S3
-│   ├── decryption.py         # Read pipeline: PyArrow decrypt (used by Lambda)
-│   └── config.py             # Column→key mappings, KMS ARNs, S3 paths
+├── pme/
+│   ├── src/
+│   │   ├── kms_client.py         # AwsKmsClient — bridges PyArrow → AWS KMS
+│   │   ├── encryption.py         # Write pipeline: encrypt columns → PME Parquet → S3
+│   │   ├── config.py             # Column→key mappings, KMS ARNs, S3 paths
+│   │   └── __init__.py
+│   ├── tests/
+│   │   ├── conftest.py           # InMemoryKmsClient fixture (no AWS needed)
+│   │   ├── test_kms_client.py
+│   │   ├── test_encryption.py
+│   │   ├── test_integration.py   # Integration tests with real AWS KMS
+│   │   └── test_roundtrip.py
+│   ├── demo_encrypt.py           # CLI demo: encrypt sample data to S3
+│   ├── inspect_encrypted.py      # CLI tool: inspect PME Parquet file structure
+│   ├── requirements.txt
+│   └── __init__.py
 ├── lambda/
-│   ├── Dockerfile            # Container image: Python 3.12 + PyArrow + boto3
-│   ├── handler_encrypt.py    # Lambda: reads CSV from S3, encrypts, writes PME Parquet
-│   ├── handler_decrypt.py    # Lambda: reads PME from S3, decrypts, returns rows
-│   └── requirements.txt      # Lambda dependencies (pyarrow, boto3)
-├── snowflake/
-│   ├── setup.sql             # API integration, external functions, roles, grants
-│   └── demo_queries.sql      # Demo queries showing RBAC in action
-├── notebooks/
-│   ├── 01_generate_and_encrypt.ipynb
-│   ├── 02_local_decrypt_rbac.ipynb
-│   └── 03_benchmark.ipynb
+│   ├── Dockerfile                # Container image: Python 3.12 + PyArrow + s3fs
+│   ├── handler.py                # Lambda: reads CSV from S3, encrypts, writes PME Parquet
+│   ├── deploy.sh                 # Build, push to ECR, update Lambda function
+│   └── requirements.txt          # Lambda-only deps (pyarrow, s3fs — boto3 pre-installed)
 ├── infra/
-│   ├── kms.tf                # 3 KMS CMKs (footer, PCI, PII)
-│   ├── iam.tf                # RBAC roles + Lambda execution roles
-│   ├── s3.tf                 # S3 bucket for encrypted data
-│   ├── lambda.tf             # Lambda functions (container image) + ECR
-│   ├── api_gateway.tf        # API Gateway for Snowflake external functions
-│   └── variables.tf / outputs.tf
-├── tests/
-│   ├── conftest.py           # InMemoryKmsClient fixture (no AWS needed)
-│   ├── test_kms_client.py
-│   ├── test_encryption.py
-│   ├── test_decryption.py
-│   ├── test_integration.py   # Integration tests with real AWS KMS
-│   └── test_roundtrip.py
-├── demo_encrypt.py           # CLI demo: encrypt sample data to S3
-├── inspect_encrypted.py      # CLI tool: inspect PME Parquet file structure
-├── requirements.txt
-├── pyproject.toml
+│   ├── main.tf                   # Provider + S3 backend
+│   ├── variables.tf              # Input variables
+│   ├── kms.tf                    # 3 KMS CMKs (footer, PCI, PII)
+│   ├── iam.tf                    # RBAC roles (fraud/marketing/junior/write)
+│   ├── s3.tf                     # S3 bucket for encrypted data
+│   ├── lambda.tf                 # ECR + Lambda encrypt function + IAM execution role
+│   ├── athena.tf                 # Athena Spark workgroups
+│   └── outputs.tf
+├── Hackathon_customer_data.csv   # Synthetic sample data (100 rows)
 └── README.md
 ```
+
+## Progress Summary
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| Phase 1 | Project skeleton + environment | DONE |
+| Phase 2 | Core KMS client | DONE |
+| Phase 3 | Encrypt (write pipeline) | DONE |
+| Phase 4 | Decrypt (read pipeline) + RBAC | TODO |
+| Phase 5 | Sample data | DONE |
+| Phase 6 | AWS infrastructure (Terraform) | DONE |
+| Phase 7 | Lambda container image — encrypt | DONE |
+| Phase 8 | RBAC demo + verification | TODO |
+| Phase 9 | API Gateway | TODO |
+| Phase 10 | Snowflake integration | TODO |
+| Phase 11 | Benchmarks + polish | TODO |
 
 ## Implementation Phases
 
 ### DAY 1: Write Path + Lambda Encrypt/Decrypt + RBAC Demo
 
-#### Phase 1: Project Skeleton + Environment
+#### Phase 1: Project Skeleton + Environment — DONE
 
 - Create directory structure.
 - `pyproject.toml` with package metadata.
@@ -122,7 +133,7 @@ pme/
 - Verify PyArrow encryption module loads.
 - `PmeConfig` dataclass with KMS ARNs, column→key maps, algorithm settings.
 
-#### Phase 2: Core KMS Client (most critical component)
+#### Phase 2: Core KMS Client (most critical component) — DONE
 
 `AwsKmsClient(pe.KmsClient)` with `wrap_key`/`unwrap_key` backed by boto3 KMS.
 
@@ -152,7 +163,7 @@ Additional components:
 - `custom_kms_conf` carries region + optional `role_arn`.
 - Single wrapping (`double_wrapping=False`) for hackathon simplicity.
 
-#### Phase 3: Encrypt (Write Pipeline)
+#### Phase 3: Encrypt (Write Pipeline) — DONE
 
 - `write_encrypted_parquet(table, path, config)` → `CryptoFactory` + `EncryptionConfiguration` + `pq.ParquetWriter`.
 - `write_encrypted_to_s3(table, config)` → S3 write via `s3fs`.
@@ -200,19 +211,24 @@ Additional components:
 | `pme-marketing-analyst` | Decrypt | DENY | Decrypt | Sees PII, not PCI |
 | `pme-junior-analyst` | Decrypt | DENY | DENY | Sees non-sensitive only |
 
-#### Phase 5: Sample Data
+#### Phase 5: Sample Data — DONE
 
-Sample data is provided in `Hackathon_customer_data.csv` (columns: `first_name`, `last_name`, `ssn`, `email`, `xid`, `balance`). No data generation step needed.
+Sample data is provided in `Hackathon_customer_data.csv` (columns: `first_name`, `last_name`, `ssn`, `email`, `xid`, `balance`). No data generation step needed. CSV is uploaded to `s3://pwe-hackathon-pme-data-651767347247/raw-data/`.
 
-#### Phase 6: AWS Infrastructure (Terraform)
+#### Phase 6: AWS Infrastructure (Terraform) — DONE
 
-- 3 KMS CMKs: `alias/pme-footer-key`, `alias/pme-pci-key`, `alias/pme-pii-key`.
-- 3 IAM RBAC Roles: `pme-fraud-analyst`, `pme-marketing-analyst`, `pme-junior-analyst`.
-- 1 Write Role: `kms:Encrypt` + `kms:GenerateDataKey` on all 3 CMKs + S3 read/write.
-- 1 S3 Bucket: encrypted data storage with `pme-data/` prefix.
-- 1 ECR Repository: for Lambda container image.
-- 4 Lambda Functions (container image):
-  - `pwe-hackathon-encrypt`: write role — encrypts data to S3.
+All infrastructure is deployed in `us-east-2` (account `651767347247`):
+
+- 3 KMS CMKs: `alias/pwe-hackathon-footer-key`, `alias/pwe-hackathon-pci-key`, `alias/pwe-hackathon-pii-key`.
+- 4 IAM RBAC Roles: `pwe-hackathon-fraud-analyst`, `pwe-hackathon-marketing-analyst`, `pwe-hackathon-junior-analyst`, `pwe-hackathon-write-role`.
+- 1 Lambda execution role: `pwe-hackathon-lambda-pme-encrypt` (KMS encrypt/decrypt + S3 read/write + CloudWatch logs).
+- 1 S3 Bucket: `pwe-hackathon-pme-data-651767347247` with `pme-data/` prefix.
+- 1 ECR Repository: `pwe-hackathon-pme-lambda`.
+- 1 Lambda Function (container image): `pwe-hackathon-pme-encrypt` (1536 MB, 300s timeout).
+- 1 CloudWatch log group: `/aws/lambda/pwe-hackathon-pme-encrypt` (7-day retention).
+- 3 Athena Spark workgroups: fraud, marketing, junior analyst.
+
+**Remaining Lambda functions (decrypt) to be added:**
   - `pwe-hackathon-decrypt-fraud`: fraud analyst role — decrypts all columns.
   - `pwe-hackathon-decrypt-marketing`: marketing role — decrypts PII only.
   - `pwe-hackathon-decrypt-junior`: junior role — decrypts non-sensitive only.
@@ -228,30 +244,41 @@ KMS CMKs
 
 Remove IAM roles → every Lambda has the same KMS access → no RBAC demo.
 
-#### Phase 7: Lambda Container Image — Encrypt + Decrypt
+#### Phase 7: Lambda Container Image — Encrypt — DONE
 
-**Container image:**
+**Container image (deployed to ECR):**
 
 - Base: `public.ecr.aws/lambda/python:3.12`
-- Install: `pyarrow`, `boto3`, `pandas`
-- Copy: `src/` modules (kms_client, encryption, decryption, config)
-- Handlers: `handler_encrypt.encrypt_handler` and `handler_decrypt.decrypt_handler`
+- Dependencies: `pyarrow>=15.0`, `s3fs>=2024.2` (boto3 pre-installed in Lambda runtime)
+- Copies `pme/` package preserving import structure (`from pme.src.xxx`)
+- Handler: `handler.lambda_handler`
+- Build: `docker build --platform linux/amd64 --provenance=false` (required for Lambda manifest compat)
+- Deploy: `lambda/deploy.sh` handles ECR login, build, push, and `update-function-code`
 
-**Encrypt Lambda (`handler_encrypt.py`):**
+**Encrypt Lambda (`lambda/handler.py`) — DEPLOYED AND TESTED:**
 
-1. Triggered by S3 event (new CSV upload) or manual invoke.
-2. Reads CSV from S3 → converts to PyArrow Table.
-3. Calls `write_encrypted_to_s3()` with column→KMS key mappings.
-4. Writes PME-encrypted Parquet to S3 output prefix.
+- Reads config from environment variables (`S3_BUCKET`, `S3_PREFIX`, `FOOTER_KEY_ARN`, `PCI_KEY_ARN`, `PII_KEY_ARN`)
+- Accepts event: `{ "input_s3_key": "...", "output_filename": "...", "s3_prefix": "..." }` (all optional with defaults)
+- Downloads CSV from S3 via `boto3.client("s3").get_object()`
+- Parses CSV with `csv.DictReader` → `pa.Table.from_pylist()`
+- Creates `AwsKmsClientFactory` (uses Lambda execution role via default boto3 chain — no `role_arn` needed)
+- Calls `write_encrypted_to_s3()` from `pme/src/encryption.py`
+- Returns `{ statusCode: 200, body: { output_s3_uri, rows_encrypted, columns_encrypted, input_s3_key } }`
 
-**Decrypt Lambda (`handler_decrypt.py`):**
+**Test results:**
 
-1. Invoked directly, via API Gateway, or from Snowflake external function.
-2. Receives S3 path of PME Parquet file.
-3. Calls `read_encrypted_parquet()` — execution role determines which columns decrypt.
-4. Returns JSON rows (decrypted columns have values, unauthorized columns are NULL).
+```
+$ aws lambda invoke --function-name pwe-hackathon-pme-encrypt --payload '{}' /dev/stdout
+{"statusCode": 200, "body": {"output_s3_uri": "s3://pwe-hackathon-pme-data-651767347247/pme-data/customer_data_encrypted.parquet", "rows_encrypted": 100, "columns_encrypted": ["ssn", "first_name", "last_name", "email"]}}
+```
 
-**RBAC demo flow:**
+**Decrypt Lambda — TODO:**
+
+- Separate handler for reading PME Parquet and decrypting based on execution role
+- One Lambda per RBAC tier (fraud/marketing/junior), each with different IAM execution role
+- Returns JSON rows; unauthorized columns return NULL
+
+**RBAC demo flow (planned):**
 
 ```
 Invoke pwe-hackathon-decrypt-fraud   → all columns visible
@@ -309,19 +336,19 @@ FROM TABLE(RESULT_SCAN(pme_decrypt_junior('pme-data/data.parquet'))) t;
 
 ## Verification Plan
 
-| Check | Command / Method |
-|-------|-----------------|
-| PyArrow encryption loads | `python -c 'from pyarrow.parquet.encryption import CryptoFactory'` |
-| Unit tests pass (no AWS) | `pytest pme/tests/ -m 'not integration'` |
-| File is encrypted | First 4 bytes = `PARE` (not `PAR1`) |
-| Roundtrip integrity | encrypt → decrypt → `assert table.equals(original)` |
-| RBAC works locally | Assume each role → verify column visibility |
-| Lambda encrypt works | Invoke encrypt Lambda → verify PARE file in S3 |
-| Lambda decrypt — fraud | Invoke → all columns have values |
-| Lambda decrypt — marketing | Invoke → PCI columns = NULL |
-| Lambda decrypt — junior | Invoke → PCI + PII columns = NULL |
-| Snowflake RBAC demo | Same query as 3 roles → different columns visible |
-| Integration tests | `pytest pme/tests/ -m integration` |
+| Check | Command / Method | Status |
+|-------|-----------------|--------|
+| PyArrow encryption loads | `python -c 'from pyarrow.parquet.encryption import CryptoFactory'` | DONE |
+| Unit tests pass (no AWS) | `pytest pme/tests/ -m 'not integration'` | DONE |
+| File is encrypted | First 4 bytes = `PAR1` (plaintext footer, columns encrypted) | DONE |
+| Roundtrip integrity | encrypt → decrypt → `assert table.equals(original)` | DONE |
+| RBAC works locally | Assume each role → verify column visibility | DONE |
+| Lambda encrypt works | `aws lambda invoke --function-name pwe-hackathon-pme-encrypt --payload '{}'` → 100 rows encrypted to S3 | DONE |
+| Lambda decrypt — fraud | Invoke → all columns have values | TODO |
+| Lambda decrypt — marketing | Invoke → PCI columns = NULL | TODO |
+| Lambda decrypt — junior | Invoke → PCI + PII columns = NULL | TODO |
+| Snowflake RBAC demo | Same query as 3 roles → different columns visible | TODO |
+| Integration tests | `pytest pme/tests/ -m integration` | DONE |
 
 ## Commit Strategy (Conventional Commits)
 
