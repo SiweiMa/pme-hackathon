@@ -78,6 +78,14 @@ class PmeConfig:
         return [col for group in self.column_groups for col in group.columns]
 
     @property
+    def kms_column_keys(self) -> Dict[str, List[str]]:
+        """Return {kms_arn: [col_names]} for PyArrow EncryptionConfiguration."""
+        return {
+            group.kms_key.key_arn: list(group.columns)
+            for group in self.column_groups
+        }
+
+    @property
     def s3_path(self) -> str:
         """Return the full S3 URI for the data prefix."""
         return f"s3://{self.s3_bucket}/{self.s3_prefix}"

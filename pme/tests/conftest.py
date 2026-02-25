@@ -10,12 +10,21 @@ from __future__ import annotations
 import base64
 import json
 import os
-from typing import Dict
+from datetime import timedelta
+from typing import Dict, List
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pyarrow.parquet.encryption as pe
 import pytest
 
-from pme.src.config import PmeConfig, KmsKeyConfig, ColumnGroupConfig, default_config
+from pme.src.config import (
+    PmeConfig,
+    KmsKeyConfig,
+    ColumnGroupConfig,
+    EncryptionAlgorithm,
+    default_config,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -87,3 +96,50 @@ def pme_config() -> PmeConfig:
         pci_key_arn=FAKE_PCI_ARN,
         pii_key_arn=FAKE_PII_ARN,
     )
+
+
+@pytest.fixture
+def pme_config_encrypted_footer() -> PmeConfig:
+    """Return a PmeConfig with plaintext_footer=False (encrypted footer)."""
+    config = default_config(
+        footer_key_arn=FAKE_FOOTER_ARN,
+        pci_key_arn=FAKE_PCI_ARN,
+        pii_key_arn=FAKE_PII_ARN,
+    )
+    config.plaintext_footer = False
+    return config
+
+
+@pytest.fixture
+def sample_table() -> pa.Table:
+    """Return a small PyArrow table with PCI, PII, and non-sensitive columns."""
+    return pa.table(
+        {
+            # PCI columns
+            "ssn": ["123-45-6789", "987-65-4321"],
+            "pan": ["4111111111111111", "5500000000000004"],
+            "card_number": ["4111-1111-1111-1111", "5500-0000-0000-0004"],
+            # PII columns
+            "first_name": ["Alice", "Bob"],
+            "last_name": ["Smith", "Jones"],
+            "email": ["alice@example.com", "bob@example.com"],
+            "phone": ["555-0100", "555-0200"],
+            # Non-sensitive columns
+            "customer_id": [1001, 1002],
+            "account_type": ["checking", "savings"],
+        }
+    )
+
+
+@pytest.fixture
+def crypto_factory(in_memory_kms_factory) -> pe.CryptoFactory:
+    """Return a CryptoFactory backed by InMemoryKmsClient."""
+    return pe.CryptoFactory(in_memory_kms_factory)
+
+
+@pytest.fixture
+def kms_conn_config() -> pe.KmsConnectionConfig:
+    """Return a KmsConnectionConfig for test use."""
+    kms_conn = pe.KmsConnectionConfig()
+    kms_conn.custom_kms_conf = json.dumps({"region": "us-east-1"})
+    return kms_conn
