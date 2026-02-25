@@ -50,6 +50,7 @@ aws ecr get-login-password --region "${AWS_REGION}" \
 echo ">>> Building container image..."
 docker build \
   --platform linux/amd64 \
+  --provenance=false \
   -f lambda/Dockerfile \
   -t "${IMAGE_NAME}:${GIT_SHA}" \
   -t "${IMAGE_NAME}:latest" \
