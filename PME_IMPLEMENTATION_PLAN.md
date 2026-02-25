@@ -29,7 +29,7 @@ S3 event or manual invoke
 
 ### Read Path: QuickSight via Athena Federated Query
 
-**Important nuance:** Athena SQL (the engine QuickSight uses) and Athena Spark are two different engines. Athena SQL cannot "see" the decryption configurations inside a Spark session. Therefore, for QuickSight to "Direct Query" PME data on the fly, you must use a Lambda Federated Connector as a translation layer that presents the data to Athena SQL in a way it can understand.
+**Important nuance:** Athena SQL (Trino) does not natively support PME decryption — it cannot pass PME column-keys or footer-keys into its internal Parquet reader. Therefore, for QuickSight to "Direct Query" PME data on the fly, you must use a Lambda Federated Connector as a decryption proxy that presents the data to Athena SQL in a way it can understand.
 
 ```
 S3 (PME-Encrypted Parquet)
@@ -50,7 +50,7 @@ You don't store the decrypted files, but you **do** store the metadata (the tabl
 To make this work "on the fly" for QuickSight, use a Lambda-based Federated Query:
 
 1. **Register the table in Glue Catalog:** Define the PME-encrypted data as a Glue table pointing to the S3 path.
-2. **Deploy a Lambda Federated Connector:** Athena has a Federated Query feature. Deploy a Lambda function (AWS provides templates) that uses the Spark/Hadoop libraries to read PME data and decrypt it in memory.
+2. **Deploy a Lambda Federated Connector:** Athena has a Federated Query feature. Deploy a Lambda function (AWS provides templates) that uses the Hadoop PME libraries to read PME data and decrypt it in memory.
 3. **Create the Athena SQL view:**
    ```sql
    CREATE VIEW "decrypted_pme_view" AS
@@ -269,7 +269,7 @@ $ aws lambda invoke --function-name pwe-hackathon-pme-encrypt --payload '{}' /de
 
 #### Phase 8: Lambda Federated Connector — Decryption Proxy
 
-**Important nuance:** Athena SQL (the engine QuickSight uses) and Athena Spark are two different engines. Athena SQL cannot "see" the decryption configurations inside a Spark session. Therefore, for QuickSight to "Direct Query" PME data on the fly, you must use a Lambda Federated Connector as a translation layer that presents the data to Athena SQL in a way it can understand.
+**Important nuance:** Athena SQL (Trino) does not natively support PME decryption — it cannot pass PME column-keys or footer-keys into its internal Parquet reader. Therefore, for QuickSight to "Direct Query" PME data on the fly, you must use a Lambda Federated Connector as a decryption proxy that presents the data to Athena SQL in a way it can understand.
 
 **The architecture to achieve this:**
 
@@ -277,15 +277,15 @@ $ aws lambda invoke --function-name pwe-hackathon-pme-encrypt --payload '{}' /de
 
 You don't store the decrypted files, but you **do** store the metadata (the table definition) in the Glue Data Catalog.
 
-- In Spark: define an external table pointing to the PME-encrypted S3 path. Include the PME decryption configurations in the Spark session metadata.
+- Register an external table in the Glue Data Catalog pointing to the PME-encrypted S3 path (done in Phase 7 via Terraform).
 - **The problem:** If QuickSight queries this table via Athena SQL, the query will fail because Athena SQL doesn't know how to handle the Parquet encryption footers.
 
 ##### 2. The Solution: The "Decryption Proxy" View
 
 To make this work "on the fly" for QuickSight, use a Lambda-based Federated Query:
 
-1. **Define the table in Spark:** Register the PME-encrypted data as a table in the Glue Catalog using the Athena Spark notebook.
-2. **Deploy a Lambda Federated Connector:** Athena has a Federated Query feature. Deploy a Lambda function (AWS provides templates) that uses the Spark/Hadoop libraries to read the PME data and decrypt it in memory.
+1. **Register the Glue table:** The Glue Data Catalog table (created in Phase 7 via Terraform) points to the PME-encrypted S3 path.
+2. **Deploy a Lambda Federated Connector:** Athena has a Federated Query feature. Deploy a Lambda function (AWS provides templates) that uses the Hadoop PME libraries to read the PME data and decrypt it in memory.
 3. **Create the Athena SQL view:**
    ```sql
    CREATE VIEW "decrypted_pme_view" AS
