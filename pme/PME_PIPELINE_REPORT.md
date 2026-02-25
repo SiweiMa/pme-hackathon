@@ -201,37 +201,74 @@ File metadata (via get_file_metadata)...
 
 ## 7. RBAC Access Control
 
-Access is controlled at the **KMS key level**. Different IAM roles are granted `kms:Decrypt` on different CMKs. Because PyArrow's C++ reader processes metadata for **ALL** columns during any read, reads are **all-or-nothing**: if any column key is denied, the entire read fails.
+**Entry point:** `read_with_partial_access(path, config, kms_client_factory, denied_key_aliases=...)`
+
+Access control is enforced at the **application layer** with column-level null masking. A service with full KMS access decrypts the file, then replaces denied columns with `null` based on the caller's role. Users see the data they are allowed to see — denied columns come back as null instead of failing the entire read.
+
+### Why application-level masking?
+
+PyArrow's C++ Parquet reader decrypts **all** column data during any read (even with `columns=` filtering). Partial decryption at the crypto layer is not possible. Application-level masking after a full-access read is the standard pattern for data platforms (Spark, Trino, etc.).
 
 ### Role Definitions
 
 | Role | PCI Key (`pme-pci-key`) | PII Key (`pme-pii-key`) | Footer Key | Result |
 |------|-------------------------|-------------------------|------------|--------|
-| **Fraud Analyst** | Decrypt | Decrypt | Decrypt | Reads all columns |
-| **Marketing Analyst** | **Denied** | Decrypt | Decrypt | Read fails |
-| **Junior Analyst** | **Denied** | **Denied** | Decrypt | Read fails |
+| **Fraud Analyst** | Allowed | Allowed | Allowed | All columns with data |
+| **Marketing Analyst** | **Denied** | Allowed | Allowed | PCI columns → null, rest with data |
+| **Junior Analyst** | **Denied** | **Denied** | Allowed | PCI+PII columns → null, non-sensitive with data |
 
-### Actual result — Marketing Analyst (PCI denied)
-
-```
-RBAC: Marketing analyst (PCI key DENIED)...
-    Correctly denied: Access denied: kms:Decrypt not allowed for key 'pme-pci-key'
-```
-
-The read fails entirely. No partial data is returned — even the non-sensitive `xid` and `balance` columns are inaccessible.
-
-### Actual result — Junior Analyst (PCI + PII denied)
+### Actual result — Marketing Analyst (PCI denied → ssn nulled)
 
 ```
-RBAC: Junior analyst (PCI + PII keys DENIED)...
-    Correctly denied: Access denied: kms:Decrypt not allowed for key 'pme-pii-key'
+RBAC: Marketing analyst (PCI key DENIED → ssn nulled)...
+    Recovered 100 rows, 6 columns
+    Nulled columns (PCI): ['ssn']
+
+    First 5 rows:
+first_name last_name  ssn                    email      xid  balance
+     James    Miller None james.miller@example.com XID04821  4520.50
+     Maria    Garcia None    m.garcia@testmail.org XID92103   120.75
+    Robert     Smith None    rsmith88@provider.net XID55291  8943.20
+     Linda   Johnson None      linda.j@company.com XID11034    25.00
+   Michael     Brown None   mike.brown@webmail.com XID88273 15600.44
 ```
 
-Denied on the first encrypted column group encountered. No data is returned.
+The marketing analyst sees PII (names, email) and non-sensitive columns (xid, balance), but `ssn` is null.
 
-### How to grant access in AWS
+### Actual result — Junior Analyst (PCI + PII denied → 4 columns nulled)
 
-Each role's IAM policy controls which KMS keys it can use:
+```
+RBAC: Junior analyst (PCI + PII keys DENIED → nulled)...
+    Recovered 100 rows, 6 columns
+    Nulled columns (PCI+PII): ['ssn', 'first_name', 'last_name', 'email']
+
+    First 5 rows:
+first_name last_name  ssn email      xid  balance
+      None      None None  None XID04821  4520.50
+      None      None None  None XID92103   120.75
+      None      None None  None XID55291  8943.20
+      None      None None  None XID11034    25.00
+      None      None None  None XID88273 15600.44
+```
+
+The junior analyst sees only non-sensitive columns (`xid`, `balance`). All PCI and PII columns are null.
+
+### How it works
+
+```python
+from pme.src.decryption import read_with_partial_access
+
+# Service reads with full access, applies role-based masking
+table = read_with_partial_access(
+    path, config, full_access_factory,
+    denied_key_aliases=frozenset({"pme-pci-key"}),  # marketing role
+)
+# → ssn is null, everything else populated
+```
+
+### How to define roles in AWS
+
+Each role's IAM policy controls which KMS keys the **service** would consider denied for that role:
 
 ```json
 {
@@ -239,13 +276,12 @@ Each role's IAM policy controls which KMS keys it can use:
     "Action": ["kms:Decrypt"],
     "Resource": [
         "arn:aws:kms:us-east-2:651767347247:alias/pwe-hackathon-footer-key",
-        "arn:aws:kms:us-east-2:651767347247:alias/pwe-hackathon-pci-key",
         "arn:aws:kms:us-east-2:651767347247:alias/pwe-hackathon-pii-key"
     ]
 }
 ```
 
-Remove a resource from the list to deny that tier. Under the all-or-nothing model, all three keys must be granted for reads to succeed.
+Remove a resource from the list to deny that tier. The `denied_key_aliases` parameter maps directly to the missing keys in the role's IAM policy.
 
 ---
 
@@ -277,7 +313,7 @@ Encrypted footer mode (plaintext_footer=False)...
 | Plaintext DEKs never written to disk | Yes |
 | Different KMS keys per sensitivity tier | Yes |
 | Access controlled via IAM `kms:Decrypt` grants | Yes |
-| Partial column reads bypass encryption | No — all-or-nothing |
+| Partial access (denied columns → null) | Yes — application-level masking |
 | Schema discoverable without keys (plaintext footer) | Configurable |
 
 ## 10. File Inventory
@@ -286,7 +322,7 @@ Encrypted footer mode (plaintext_footer=False)...
 |------|---------|
 | `pme/src/config.py` | Configuration: KMS keys, column groups, algorithm settings |
 | `pme/src/encryption.py` | Write pipeline: `write_encrypted_parquet()`, `write_encrypted_to_s3()` |
-| `pme/src/decryption.py` | Read pipeline: `read_encrypted_parquet()`, `read_encrypted_from_s3()` |
+| `pme/src/decryption.py` | Read pipeline: `read_encrypted_parquet()`, `read_with_partial_access()`, `read_encrypted_from_s3()` |
 | `pme/src/kms_client.py` | AWS KMS integration: `AwsKmsClient`, `AwsKmsClientFactory` |
 | `pme/demo_read_pipeline.py` | Demo script that produced this report's output |
 | `pme/tests/conftest.py` | Test fixtures: `InMemoryKmsClient`, RBAC role factories |

@@ -212,31 +212,6 @@ def kms_conn_config() -> pe.KmsConnectionConfig:
     return kms_conn
 
 
-# ---------------------------------------------------------------------------
-# RBAC role fixtures — simulate IAM-based access control via denied keys
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def fraud_analyst_factory() -> InMemoryKmsClientFactory:
-    """Full access — can decrypt all column groups (PCI + PII)."""
-    return InMemoryKmsClientFactory()
-
-
-@pytest.fixture
-def marketing_analyst_factory() -> RestrictedInMemoryKmsClientFactory:
-    """Denied PCI columns — cannot decrypt ssn/pan/card_number."""
-    return RestrictedInMemoryKmsClientFactory(denied_key_ids={FAKE_PCI_ALIAS})
-
-
-@pytest.fixture
-def junior_analyst_factory() -> RestrictedInMemoryKmsClientFactory:
-    """Denied PCI + PII columns — can only read non-sensitive data."""
-    return RestrictedInMemoryKmsClientFactory(
-        denied_key_ids={FAKE_PCI_ALIAS, FAKE_PII_ALIAS}
-    )
-
-
 @pytest.fixture
 def encrypted_parquet_path(
     tmp_path, sample_table, pme_config, in_memory_kms_factory

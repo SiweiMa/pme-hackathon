@@ -17,7 +17,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from pme.src.config import ColumnGroupConfig, KmsKeyConfig, PmeConfig
-from pme.src.decryption import get_file_metadata, read_encrypted_parquet
+from pme.src.decryption import (
+    get_file_metadata,
+    read_encrypted_parquet,
+    read_with_partial_access,
+)
 from pme.src.encryption import verify_pme_file, write_encrypted_parquet
 from pme.tests.conftest import (
     FAKE_FOOTER_ARN,
@@ -26,7 +30,6 @@ from pme.tests.conftest import (
     FAKE_PII_ALIAS,
     FAKE_PII_ARN,
     InMemoryKmsClientFactory,
-    RestrictedInMemoryKmsClientFactory,
 )
 
 CSV_PATH = Path(__file__).resolve().parents[1] / "Hackathon_customer_data.csv"
@@ -141,27 +144,29 @@ def main():
         print(f"    num_columns: {metadata.num_columns}")
         print(f"    created_by: {metadata.created_by}")
 
-        # ── 9. RBAC — Marketing analyst (PCI denied) ─────────────────────
-        print(f"\n[9] RBAC: Marketing analyst (PCI key DENIED)...")
-        marketing_factory = RestrictedInMemoryKmsClientFactory(
-            denied_key_ids={FAKE_PCI_ALIAS}
+        # ── 9. RBAC — Marketing analyst (PCI denied → nulled) ────────────
+        print(f"\n[9] RBAC: Marketing analyst (PCI key DENIED → ssn nulled)...")
+        marketing = read_with_partial_access(
+            out_path, config, factory,
+            denied_key_aliases=frozenset({FAKE_PCI_ALIAS}),
         )
-        try:
-            read_encrypted_parquet(out_path, config, marketing_factory)
-            print("    ERROR: read succeeded (unexpected)")
-        except PermissionError as e:
-            print(f"    Correctly denied: {e}")
+        print(f"    Recovered {marketing.num_rows} rows, {marketing.num_columns} columns")
+        pci_cols = [c for g in config.column_groups if g.kms_key.alias == FAKE_PCI_ALIAS for c in g.columns]
+        print(f"    Nulled columns (PCI): {pci_cols}")
+        print(f"\n    First 5 rows:")
+        print(marketing.to_pandas().head().to_string(index=False))
 
-        # ── 10. RBAC — Junior analyst (PCI + PII denied) ────────────────
-        print(f"\n[10] RBAC: Junior analyst (PCI + PII keys DENIED)...")
-        junior_factory = RestrictedInMemoryKmsClientFactory(
-            denied_key_ids={FAKE_PCI_ALIAS, FAKE_PII_ALIAS}
+        # ── 10. RBAC — Junior analyst (PCI + PII denied → nulled) ───────
+        print(f"\n[10] RBAC: Junior analyst (PCI + PII keys DENIED → nulled)...")
+        junior = read_with_partial_access(
+            out_path, config, factory,
+            denied_key_aliases=frozenset({FAKE_PCI_ALIAS, FAKE_PII_ALIAS}),
         )
-        try:
-            read_encrypted_parquet(out_path, config, junior_factory)
-            print("    ERROR: read succeeded (unexpected)")
-        except PermissionError as e:
-            print(f"    Correctly denied: {e}")
+        print(f"    Recovered {junior.num_rows} rows, {junior.num_columns} columns")
+        pii_cols = [c for g in config.column_groups if g.kms_key.alias == FAKE_PII_ALIAS for c in g.columns]
+        print(f"    Nulled columns (PCI+PII): {pci_cols + pii_cols}")
+        print(f"\n    First 5 rows:")
+        print(junior.to_pandas().head().to_string(index=False))
 
         # ── 11. Encrypted footer mode ────────────────────────────────────
         print(f"\n[11] Encrypted footer mode (plaintext_footer=False)...")
