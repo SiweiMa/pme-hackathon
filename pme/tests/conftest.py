@@ -36,13 +36,23 @@ class InMemoryKmsClient(pe.KmsClient):
     encoding (prefixed with the master key ID so unwrap can verify).
 
     No AWS calls are made. Suitable for unit tests.
+
+    Accepts either a JSON string or a KmsConnectionConfig object
+    (PyArrow 23+ passes the object directly to the factory callback).
     """
 
     WRAP_PREFIX = b"INMEM:"
 
-    def __init__(self, kms_connection_config: str = "{}") -> None:
+    def __init__(self, kms_connection_config=None) -> None:
         super().__init__()
-        self._conf = json.loads(kms_connection_config) if kms_connection_config else {}
+        if kms_connection_config is None:
+            self._conf: Dict = {}
+        elif isinstance(kms_connection_config, pe.KmsConnectionConfig):
+            self._conf = dict(kms_connection_config.custom_kms_conf or {})
+        elif isinstance(kms_connection_config, str):
+            self._conf = json.loads(kms_connection_config) if kms_connection_config else {}
+        else:
+            self._conf = {}
 
     def wrap_key(self, key_bytes: bytes, master_key_identifier: str) -> str:
         payload = self.WRAP_PREFIX + master_key_identifier.encode() + b"|" + key_bytes
@@ -61,9 +71,13 @@ class InMemoryKmsClient(pe.KmsClient):
 
 
 class InMemoryKmsClientFactory:
-    """Factory that creates InMemoryKmsClient instances."""
+    """Factory that creates InMemoryKmsClient instances.
 
-    def __call__(self, kms_connection_config: str) -> InMemoryKmsClient:
+    PyArrow 23+ passes a KmsConnectionConfig object to the factory
+    callback (not a JSON string).
+    """
+
+    def __call__(self, kms_connection_config) -> InMemoryKmsClient:
         return InMemoryKmsClient(kms_connection_config)
 
 
@@ -71,9 +85,14 @@ class InMemoryKmsClientFactory:
 # Fixtures
 # ---------------------------------------------------------------------------
 
-FAKE_FOOTER_ARN = "arn:aws:kms:us-east-1:123456789012:alias/pme-footer-key"
-FAKE_PCI_ARN = "arn:aws:kms:us-east-1:123456789012:alias/pme-pci-key"
-FAKE_PII_ARN = "arn:aws:kms:us-east-1:123456789012:alias/pme-pii-key"
+FAKE_FOOTER_ARN = "arn:aws:kms:us-east-1:123456789012:key/footer-key-id"
+FAKE_PCI_ARN = "arn:aws:kms:us-east-1:123456789012:key/pci-key-id"
+FAKE_PII_ARN = "arn:aws:kms:us-east-1:123456789012:key/pii-key-id"
+
+# Aliases used in EncryptionConfiguration (no colons — PyArrow requirement)
+FAKE_FOOTER_ALIAS = "pme-footer-key"
+FAKE_PCI_ALIAS = "pme-pci-key"
+FAKE_PII_ALIAS = "pme-pii-key"
 
 
 @pytest.fixture
@@ -141,5 +160,5 @@ def crypto_factory(in_memory_kms_factory) -> pe.CryptoFactory:
 def kms_conn_config() -> pe.KmsConnectionConfig:
     """Return a KmsConnectionConfig for test use."""
     kms_conn = pe.KmsConnectionConfig()
-    kms_conn.custom_kms_conf = json.dumps({"region": "us-east-1"})
+    kms_conn.custom_kms_conf = {"region": "us-east-1"}
     return kms_conn

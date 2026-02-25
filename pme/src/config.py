@@ -79,11 +79,27 @@ class PmeConfig:
 
     @property
     def kms_column_keys(self) -> Dict[str, List[str]]:
-        """Return {kms_arn: [col_names]} for PyArrow EncryptionConfiguration."""
+        """Return {alias: [col_names]} for PyArrow EncryptionConfiguration.
+
+        Uses aliases (no colons) because PyArrow's C++ layer uses colons
+        as delimiters when parsing column_keys. Full ARNs contain colons
+        and would break parsing.
+
+        The KMS client receives these aliases in wrap_key/unwrap_key and
+        can resolve them to full ARNs via ``alias_to_arn``.
+        """
         return {
-            group.kms_key.key_arn: list(group.columns)
+            group.kms_key.alias: list(group.columns)
             for group in self.column_groups
         }
+
+    @property
+    def alias_to_arn(self) -> Dict[str, str]:
+        """Return {alias: kms_arn} for all keys (footer + column groups)."""
+        mapping = {self.footer_key.alias: self.footer_key.key_arn}
+        for group in self.column_groups:
+            mapping[group.kms_key.alias] = group.kms_key.key_arn
+        return mapping
 
     @property
     def s3_path(self) -> str:
