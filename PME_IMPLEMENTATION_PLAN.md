@@ -81,8 +81,7 @@ pme/
 │   ├── kms_client.py         # AwsKmsClient — bridges PyArrow → AWS KMS
 │   ├── encryption.py         # Write pipeline: encrypt columns → PME Parquet → S3
 │   ├── decryption.py         # Read pipeline: PyArrow decrypt (used by Lambda)
-│   ├── config.py             # Column→key mappings, KMS ARNs, S3 paths
-│   └── data_generator.py     # Faker-based synthetic PCI/PII dataset
+│   └── config.py             # Column→key mappings, KMS ARNs, S3 paths
 ├── lambda/
 │   ├── handler.py            # Lambda: reads PME from S3, decrypts, returns rows
 │   ├── requirements.txt      # Lambda dependencies (pyarrow, boto3)
@@ -126,7 +125,7 @@ pme/
 
 - Create directory structure.
 - `pyproject.toml` with package metadata.
-- `requirements.txt`: `pyarrow>=15.0`, `boto3>=1.34`, `faker>=22.0`, `s3fs>=2024.2`, `pytest>=8.0`, `pandas>=2.1`.
+- `requirements.txt`: `pyarrow>=15.0`, `boto3>=1.34`, `s3fs>=2024.2`, `pytest>=8.0`, `pandas>=2.1`.
 - Verify PyArrow encryption module loads.
 - `PmeConfig` dataclass with KMS ARNs, column→key maps, algorithm settings.
 
@@ -208,14 +207,9 @@ Additional components:
 | `pme-marketing-analyst` | Decrypt | DENY | Decrypt | Sees PII, not PCI |
 | `pme-junior-analyst` | Decrypt | DENY | DENY | Sees non-sensitive only |
 
-#### Phase 5: Synthetic Data Generator
+#### Phase 5: Sample Data
 
-- `generate_transactions(n_rows)` using Faker.
-- Columns:
-  - **PCI**: `ssn`, `pan`, `card_number`
-  - **PII**: `first_name`, `last_name`, `email`, `phone`
-  - **Non-sensitive**: `transaction_id`, `amount`, `currency`, `transaction_date`, `merchant_name`, `merchant_category`, `status`
-- Generate at 10K / 100K / 1M rows for benchmarking.
+Sample data is provided in `Hackathon_customer_data.csv` (columns: `first_name`, `last_name`, `ssn`, `email`, `xid`, `balance`). No data generation step needed.
 
 #### Phase 6a: AWS Infrastructure — Day 1 (Terraform)
 
@@ -351,7 +345,6 @@ FROM TABLE(RESULT_SCAN(pme_decrypt_junior('pme-data/data.parquet'))) t;
 ```
 feat: add PME project skeleton with pyproject.toml and requirements
 feat: implement AwsKmsClient wrapping AWS KMS for PyArrow PME
-feat: add synthetic PCI/PII data generator with Faker
 feat: implement encrypted Parquet write pipeline
 feat: implement encrypted Parquet read pipeline with RBAC degradation
 feat: add Terraform for KMS keys, IAM roles, S3, Athena Spark workgroup
