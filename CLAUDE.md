@@ -50,12 +50,119 @@ AWS access is allowed, but existing resources are **off-limits**. Follow these r
 - Never send this data to external APIs, LLMs, or third-party services.
 - Never commit real credentials, tokens, or secrets. Use `.env` files (gitignored) for any config.
 
+### Credentials
+
+- All access credentials (AWS keys, API tokens, DB passwords, etc.) live in **`/tmp/credentials/`**.
+- Read credentials from `/tmp/credentials/` at runtime — never copy them into the repo, `.env` files, or source code.
+- Never log, print, or echo credential values to stdout/stderr.
+- Never commit any file from `/tmp/credentials/` or inline their contents anywhere in the codebase.
+- If a script or config needs a credential, reference the file path (e.g., `/tmp/credentials/aws_access_key`) rather than the value itself.
+
 ## Development Defaults
 
 - **Language/framework**: Follow the user's lead. No assumptions.
 - **Dependencies**: Always ask before adding a new dependency.
 - **Virtual environments**: If Python is used, create a local `venv/` inside the project.
-- **Git**: Follow the worktree workflow from global rules. Never commit directly to `main`.
+
+## Git Workflow (Worktree-Based)
+
+This project uses the **git worktree workflow**. All work happens in worktrees — never in the base repo.
+
+### Paths
+
+| Purpose | Path |
+|---------|------|
+| Base repo (control plane, always clean) | `~/Documents/github/pwe-hackathon` |
+| Worktrees | `~/Documents/github/pwe-hackathon-wt/` |
+
+### Branch Naming
+
+Use Conventional Commits prefixes:
+
+```
+feat/short-description
+fix/short-description
+chore/short-description
+docs/short-description
+```
+
+### Task Lifecycle
+
+```bash
+# 1. Prepare base repo
+cd ~/Documents/github/pwe-hackathon
+git fetch origin
+git checkout main && git pull --ff-only
+
+# 2. Create worktree + branch
+git worktree add -b feat/my-feature \
+  ../pwe-hackathon-wt/feat-my-feature \
+  origin/main
+cd ../pwe-hackathon-wt/feat-my-feature
+
+# 3. Work, commit atomically
+git add -p
+git commit -m "feat: add login endpoint"
+
+# 4. Push + PR
+git push -u origin feat/my-feature
+
+# 5. Cleanup after merge
+cd ~/Documents/github/pwe-hackathon
+git worktree remove ../pwe-hackathon-wt/feat-my-feature
+git branch -d feat/my-feature
+```
+
+### Hard Rules
+
+| Rule | Enforced |
+|------|----------|
+| Never commit directly on `main` | YES |
+| One task = one branch = one worktree | YES |
+| Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`) | YES |
+| Atomic commits (one logical change per commit) | YES |
+| No mixing refactor + behavior + formatting in one commit | YES |
+| Remove worktree after PR merge | YES |
+| PR description derived from `git diff main...HEAD` | YES |
+
+### Parallel Work
+
+Multiple features can run simultaneously — each in its own worktree:
+
+```bash
+git worktree add -b feat/api ../pwe-hackathon-wt/feat-api origin/main
+git worktree add -b feat/frontend ../pwe-hackathon-wt/feat-frontend origin/main
+```
+
+### .gitignore Essentials
+
+These must be gitignored (create/update `.gitignore` if missing):
+
+```
+.env
+.env.*
+*.pem
+*.key
+venv/
+node_modules/
+__pycache__/
+.DS_Store
+AWS_RESOURCES.md
+```
+
+### Commit Message Format
+
+```
+<type>: <short summary in imperative mood>
+
+[optional body — what and why, not how]
+```
+
+Examples:
+- `feat: add customer lookup API`
+- `fix: handle empty CSV rows gracefully`
+- `chore: add .gitignore for env files`
+- `docs: add API usage examples`
 
 ## What NOT to Do
 
