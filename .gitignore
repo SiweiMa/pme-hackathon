@@ -1,10 +1,32 @@
+# Environment / secrets
 .env
 .env.*
 *.pem
 *.key
+
+# Python
 venv/
-node_modules/
 __pycache__/
-.DS_Store
-AWS_RESOURCES.md
+*.pyc
+*.egg-info/
 .pytest_cache/
+
+# Node
+node_modules/
+
+# Terraform
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.backup
+infra/*.tfplan
+infra/crash.log
+infra/override.tf
+infra/override.tf.json
+infra/*_override.tf
+infra/*_override.tf.json
+
+# OS
+.DS_Store
+
+# Project
+AWS_RESOURCES.md
