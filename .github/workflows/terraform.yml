@@ -19,8 +19,8 @@ concurrency:
 env:
   TF_VERSION: "1.9.6"
   TF_WORKING_DIR: infra
-  AWS_REGION: us-east-1
-  STATE_BUCKET: pwe-hackathon-tf-state-942136460468
+  AWS_REGION: us-east-2
+  STATE_BUCKET: pwe-hackathon-tf-state-651767347247
 
 permissions:
   contents: read
@@ -42,14 +42,15 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Bootstrap state bucket
         run: |
           if ! aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null; then
             echo "Creating Terraform state bucket: $STATE_BUCKET"
-            aws s3api create-bucket --bucket "$STATE_BUCKET" --region "$AWS_REGION"
+            aws s3api create-bucket --bucket "$STATE_BUCKET" --region "$AWS_REGION" \
+              --create-bucket-configuration LocationConstraint="$AWS_REGION"
             aws s3api put-bucket-versioning --bucket "$STATE_BUCKET" \
               --versioning-configuration Status=Enabled
             aws s3api put-bucket-tagging --bucket "$STATE_BUCKET" \
@@ -125,14 +126,15 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Bootstrap state bucket
         run: |
           if ! aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null; then
             echo "Creating Terraform state bucket: $STATE_BUCKET"
-            aws s3api create-bucket --bucket "$STATE_BUCKET" --region "$AWS_REGION"
+            aws s3api create-bucket --bucket "$STATE_BUCKET" --region "$AWS_REGION" \
+              --create-bucket-configuration LocationConstraint="$AWS_REGION"
             aws s3api put-bucket-versioning --bucket "$STATE_BUCKET" \
               --versioning-configuration Status=Enabled
             aws s3api put-bucket-tagging --bucket "$STATE_BUCKET" \

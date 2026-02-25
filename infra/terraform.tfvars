@@ -1,4 +1,4 @@
-aws_region       = "us-east-1"
-aws_account_id   = "942136460468"
+aws_region       = "us-east-2"
+aws_account_id   = "651767347247"
 project          = "pwe-hackathon"
-data_bucket_name = "pwe-hackathon-pme-data-942136460468"
+data_bucket_name = "pwe-hackathon-pme-data-651767347247"

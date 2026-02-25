@@ -1,7 +1,7 @@
 variable "aws_region" {
   description = "AWS region for all resources"
   type        = string
-  default     = "us-east-1"
+  default     = "us-east-2"
 }
 
 variable "aws_account_id" {
@@ -18,11 +18,11 @@ variable "project" {
 variable "data_bucket_name" {
   description = "S3 bucket for encrypted Parquet data"
   type        = string
-  default     = "pwe-hackathon-pme-data-942136460468"
+  default     = "pwe-hackathon-pme-data-651767347247"
 }
 
 variable "state_bucket_name" {
   description = "S3 bucket for Terraform state (bootstrapped outside TF)"
   type        = string
-  default     = "pwe-hackathon-tf-state-942136460468"
+  default     = "pwe-hackathon-tf-state-651767347247"
 }
