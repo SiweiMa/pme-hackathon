@@ -2,36 +2,61 @@
 
 ## Overview
 
-This report explains how the Parquet Modular Encryption (PME) pipeline works end-to-end using concrete examples from `Hackathon_customer_data.csv`.
+This report shows the Parquet Modular Encryption (PME) pipeline running end-to-end on `Hackathon_customer_data.csv`. All output below is from an actual run of `pme/demo_read_pipeline.py`.
+
+To reproduce:
+
+```bash
+cd pme && python -m pme.demo_read_pipeline
+```
 
 ---
 
-## 1. Sample Data
-
-The CSV has 100 rows and 6 columns:
+## 1. Load Sample Data
 
 ```
-first_name,last_name,ssn,email,xid,balance
-James,Miller,999-01-1001,james.miller@example.com,XID04821,4520.5
-Maria,Garcia,999-01-1002,m.garcia@testmail.org,XID92103,120.75
-Robert,Smith,999-01-1003,rsmith88@provider.net,XID55291,8943.2
-...
+Loaded 100 rows, 6 columns
+Columns: ['first_name', 'last_name', 'ssn', 'email', 'xid', 'balance']
+Schema:
+  first_name: string
+  last_name: string
+  ssn: string
+  email: string
+  xid: string
+  balance: double
+
+First 5 rows:
+first_name last_name         ssn                    email      xid  balance
+     James    Miller 999-01-1001 james.miller@example.com XID04821  4520.50
+     Maria    Garcia 999-01-1002    m.garcia@testmail.org XID92103   120.75
+    Robert     Smith 999-01-1003    rsmith88@provider.net XID55291  8943.20
+     Linda   Johnson 999-01-1004      linda.j@company.com XID11034    25.00
+   Michael     Brown 999-01-1005   mike.brown@webmail.com XID88273 15600.44
 ```
 
-## 2. Column Classification
+---
 
-Each column is assigned a sensitivity tier, and each tier gets its own AWS KMS CMK:
+## 2. Encryption Config
+
+Each column is assigned a sensitivity tier, and each tier maps to a separate KMS CMK:
+
+```
+Footer key alias: pme-footer-key
+PCI key alias: pme-pci-key  →  columns: ['ssn']
+PII key alias: pme-pii-key  →  columns: ['first_name', 'last_name', 'email']
+Non-encrypted columns: ['xid', 'balance']
+Algorithm: AES_GCM_V1
+Plaintext footer: True
+```
 
 | Column | Tier | KMS Key (alias) | Encrypted? |
 |--------|------|------------------|------------|
-| `ssn` | PCI | `pwe-hackathon-pci-key` | Yes |
-| `first_name` | PII | `pwe-hackathon-pii-key` | Yes |
-| `last_name` | PII | `pwe-hackathon-pii-key` | Yes |
-| `email` | PII | `pwe-hackathon-pii-key` | Yes |
+| `ssn` | PCI | `pme-pci-key` | Yes |
+| `first_name` | PII | `pme-pii-key` | Yes |
+| `last_name` | PII | `pme-pii-key` | Yes |
+| `email` | PII | `pme-pii-key` | Yes |
 | `xid` | Non-sensitive | — | No |
 | `balance` | Non-sensitive | — | No |
-
-A third key, `pwe-hackathon-footer-key`, encrypts/signs the Parquet footer (file metadata).
 
 ---
 
@@ -39,73 +64,47 @@ A third key, `pwe-hackathon-footer-key`, encrypts/signs the Parquet footer (file
 
 **Entry point:** `write_encrypted_parquet(table, path, config, kms_client_factory)`
 
-### Step-by-step with example data
+### Actual result
 
 ```
-Input: PyArrow Table loaded from Hackathon_customer_data.csv (100 rows)
-
-    first_name  last_name  ssn           email                      xid       balance
-    James       Miller     999-01-1001   james.miller@example.com   XID04821  4520.5
-    Maria       Garcia     999-01-1002   m.garcia@testmail.org      XID92103  120.75
-    ...
+Writing encrypted Parquet...
+    File: customer_data_encrypted.parquet
+    Size: 8,774 bytes
+    Magic bytes: b'PAR1' (plaintext footer)
 ```
 
-**Step 1 — PyArrow generates random DEKs (Data Encryption Keys)**
+### What happens internally
 
-For each column group, PyArrow generates a random 256-bit AES key:
+1. PyArrow generates a random 256-bit AES DEK per column group:
+   - `DEK_pci` for `ssn`
+   - `DEK_pii` for `first_name`, `last_name`, `email`
+   - `DEK_footer` for the Parquet footer
 
-```
-DEK_pci  = <random 32 bytes>    → encrypts: ssn
-DEK_pii  = <random 32 bytes>    → encrypts: first_name, last_name, email
-DEK_foot = <random 32 bytes>    → encrypts: Parquet footer
-```
+2. Each DEK is wrapped (encrypted) by KMS via `wrap_key(DEK, alias)`:
+   - `wrap_key(DEK_pci, "pme-pci-key")` → KMS returns encrypted blob
+   - `wrap_key(DEK_pii, "pme-pii-key")` → KMS returns encrypted blob
+   - `wrap_key(DEK_footer, "pme-footer-key")` → KMS returns encrypted blob
 
-**Step 2 — DEKs are wrapped (encrypted) by KMS**
+3. Column data is encrypted locally with the plaintext DEKs (AES-GCM):
+   - `ssn` bytes + `DEK_pci` → encrypted bytes
+   - `first_name`, `last_name`, `email` bytes + `DEK_pii` → encrypted bytes
+   - `xid`, `balance` → stored as plaintext (not encrypted)
 
-PyArrow calls `KmsClient.wrap_key(DEK, key_alias)` for each DEK:
+4. File is written. Wrapped DEKs are stored in the Parquet footer. Plaintext DEKs are discarded.
 
-```
-wrap_key(DEK_pci,  "pwe-hackathon-pci-key")
-    → PyArrow sends DEK_pci to AWS KMS
-    → KMS encrypts DEK_pci using CMK alias/pwe-hackathon-pci-key
-    → Returns wrapped_DEK_pci (ciphertext blob)
-
-wrap_key(DEK_pii,  "pwe-hackathon-pii-key")
-    → Returns wrapped_DEK_pii
-
-wrap_key(DEK_foot, "pwe-hackathon-footer-key")
-    → Returns wrapped_DEK_foot
-```
-
-**Step 3 — Column data encrypted locally with plaintext DEKs**
-
-PyArrow encrypts each column's data in memory using AES-GCM:
-
-```
-ssn column bytes          + DEK_pci  → [encrypted ssn bytes]
-first_name column bytes   + DEK_pii  → [encrypted first_name bytes]
-last_name column bytes    + DEK_pii  → [encrypted last_name bytes]
-email column bytes        + DEK_pii  → [encrypted email bytes]
-
-xid column bytes          → [plaintext — not encrypted]
-balance column bytes      → [plaintext — not encrypted]
-```
-
-**Step 4 — Write Parquet file**
-
-The file is written with this structure:
+### File structure
 
 ```
 ┌──────────────────────────────────────────────┐
 │ Magic bytes: PAR1 (plaintext footer)         │
 ├──────────────────────────────────────────────┤
 │ Row Group 0                                  │
-│   ├─ ssn          [AES-GCM encrypted bytes]  │
-│   ├─ first_name   [AES-GCM encrypted bytes]  │
-│   ├─ last_name    [AES-GCM encrypted bytes]  │
-│   ├─ email        [AES-GCM encrypted bytes]  │
-│   ├─ xid          [plaintext bytes]          │
-│   └─ balance      [plaintext bytes]          │
+│   ├─ ssn          [AES-GCM encrypted]        │
+│   ├─ first_name   [AES-GCM encrypted]        │
+│   ├─ last_name    [AES-GCM encrypted]        │
+│   ├─ email        [AES-GCM encrypted]        │
+│   ├─ xid          [plaintext]                │
+│   └─ balance      [plaintext]                │
 ├──────────────────────────────────────────────┤
 │ Footer (signed, plaintext readable)          │
 │   ├─ Schema: column names + types            │
@@ -115,132 +114,120 @@ The file is written with this structure:
 └──────────────────────────────────────────────┘
 ```
 
-**Key point:** The plaintext DEKs are never written to disk. Only the KMS-wrapped (encrypted) DEKs are stored in the Parquet footer.
+---
 
-### What the file looks like without keys
+## 4. Schema Discovery (No Keys Required)
 
-If someone opens the file without decryption keys:
+With `plaintext_footer=True`, anyone can read the schema without decryption keys:
 
-- `xid` and `balance` are **readable** (not encrypted)
-- `ssn`, `first_name`, `last_name`, `email` are **garbled** (encrypted bytes)
-- Schema (column names/types) is **readable** when `plaintext_footer=True`
-- Schema is also encrypted when `plaintext_footer=False`
+```
+Reading schema WITHOUT decryption keys (plaintext footer)...
+    Schema columns: ['first_name', 'last_name', 'ssn', 'email', 'xid', 'balance']
+    (No KMS keys needed — footer is plaintext)
+```
+
+But attempting to read the **data** without keys fails:
+
+```
+Attempting to read DATA without decryption keys...
+    Correctly failed: OSError
+```
 
 ---
 
-## 4. Read Pipeline (Decryption)
+## 5. Read Pipeline (Decryption)
 
 **Entry point:** `read_encrypted_parquet(path, config, kms_client_factory)`
 
-### Step-by-step
+### Actual result — full access (fraud analyst role)
 
 ```
-Input: encrypted Parquet file from Step 3
+Reading with FULL ACCESS (fraud analyst role)...
+    Recovered 100 rows, 6 columns
+    Data matches original: True
+
+    First 5 rows:
+first_name last_name         ssn                    email      xid  balance
+     James    Miller 999-01-1001 james.miller@example.com XID04821  4520.50
+     Maria    Garcia 999-01-1002    m.garcia@testmail.org XID92103   120.75
+    Robert     Smith 999-01-1003    rsmith88@provider.net XID55291  8943.20
+     Linda   Johnson 999-01-1004      linda.j@company.com XID11034    25.00
+   Michael     Brown 999-01-1005   mike.brown@webmail.com XID88273 15600.44
 ```
 
-**Step 1 — PyArrow reads wrapped DEKs from the Parquet footer**
+The decrypted data is **identical** to the original CSV input.
+
+### What happens internally
+
+1. PyArrow reads wrapped DEKs from the Parquet footer
+2. Each wrapped DEK is sent to KMS via `unwrap_key(wrapped_DEK, alias)`:
+   - `unwrap_key(wrapped_DEK_pci, "pme-pci-key")` → returns plaintext `DEK_pci`
+   - `unwrap_key(wrapped_DEK_pii, "pme-pii-key")` → returns plaintext `DEK_pii`
+   - `unwrap_key(wrapped_DEK_footer, "pme-footer-key")` → returns plaintext `DEK_footer`
+3. Column data is decrypted locally with the plaintext DEKs (AES-GCM)
+4. Full PyArrow Table is returned
+
+### Column selection
+
+The `columns=` parameter filters the returned columns, but **all keys must still be available** (PyArrow decrypts all column metadata regardless):
 
 ```
-Footer contains:
-    wrapped_DEK_pci  → tagged with alias "pwe-hackathon-pci-key"
-    wrapped_DEK_pii  → tagged with alias "pwe-hackathon-pii-key"
-    wrapped_DEK_foot → tagged with alias "pwe-hackathon-footer-key"
-```
+Reading with columns=['xid', 'balance'] (full access)...
+    Recovered 100 rows, 2 columns
+    Columns: ['xid', 'balance']
 
-**Step 2 — DEKs are unwrapped (decrypted) by KMS**
-
-PyArrow calls `KmsClient.unwrap_key(wrapped_DEK, key_alias)` for each:
-
-```
-unwrap_key(wrapped_DEK_pci, "pwe-hackathon-pci-key")
-    → PyArrow sends wrapped_DEK_pci to AWS KMS
-    → KMS decrypts it using CMK alias/pwe-hackathon-pci-key
-    → Returns plaintext DEK_pci
-
-unwrap_key(wrapped_DEK_pii, "pwe-hackathon-pii-key")
-    → Returns plaintext DEK_pii
-
-unwrap_key(wrapped_DEK_foot, "pwe-hackathon-footer-key")
-    → Returns plaintext DEK_foot
-```
-
-**Step 3 — Column data decrypted locally**
-
-```
-[encrypted ssn bytes]        + DEK_pci  → "999-01-1001", "999-01-1002", ...
-[encrypted first_name bytes] + DEK_pii  → "James", "Maria", ...
-[encrypted last_name bytes]  + DEK_pii  → "Miller", "Garcia", ...
-[encrypted email bytes]      + DEK_pii  → "james.miller@example.com", ...
-
-[plaintext xid bytes]        → "XID04821", "XID92103", ...  (no decryption needed)
-[plaintext balance bytes]    → 4520.5, 120.75, ...           (no decryption needed)
-```
-
-**Step 4 — Return PyArrow Table**
-
-```
-Output: identical to the original input
-
-    first_name  last_name  ssn           email                      xid       balance
-    James       Miller     999-01-1001   james.miller@example.com   XID04821  4520.5
-    Maria       Garcia     999-01-1002   m.garcia@testmail.org      XID92103  120.75
-    ...
+    First 5 rows:
+     xid  balance
+XID04821  4520.50
+XID92103   120.75
+XID55291  8943.20
+XID11034    25.00
+XID88273 15600.44
 ```
 
 ---
 
-## 5. RBAC Access Control
+## 6. File Metadata
 
-Access is controlled at the **KMS key level**. Different IAM roles are granted `kms:Decrypt` on different CMKs.
+```
+File metadata (via get_file_metadata)...
+    num_rows: 100
+    num_row_groups: 1
+    num_columns: 6
+    created_by: parquet-cpp-arrow version 23.0.1
+```
 
-### Important: All-or-Nothing Reads
+---
 
-PyArrow's C++ reader processes metadata for **ALL** columns during any read — even if you request `columns=["xid", "balance"]`. This triggers `unwrap_key` for every encrypted column group. If any key is denied, the entire read fails.
+## 7. RBAC Access Control
+
+Access is controlled at the **KMS key level**. Different IAM roles are granted `kms:Decrypt` on different CMKs. Because PyArrow's C++ reader processes metadata for **ALL** columns during any read, reads are **all-or-nothing**: if any column key is denied, the entire read fails.
 
 ### Role Definitions
 
-| Role | PCI Key | PII Key | Footer Key | Can Read? |
-|------|---------|---------|------------|-----------|
-| **Fraud Analyst** | Decrypt | Decrypt | Decrypt | All columns |
-| **Marketing Analyst** | Denied | Decrypt | Decrypt | Fails (PCI denied) |
-| **Junior Analyst** | Denied | Denied | Decrypt | Fails (PCI+PII denied) |
+| Role | PCI Key (`pme-pci-key`) | PII Key (`pme-pii-key`) | Footer Key | Result |
+|------|-------------------------|-------------------------|------------|--------|
+| **Fraud Analyst** | Decrypt | Decrypt | Decrypt | Reads all columns |
+| **Marketing Analyst** | **Denied** | Decrypt | Decrypt | Read fails |
+| **Junior Analyst** | **Denied** | **Denied** | Decrypt | Read fails |
 
-### Example: Fraud Analyst (full access)
+### Actual result — Marketing Analyst (PCI denied)
 
-```python
-factory = AwsKmsClientFactory(region="us-east-2", role_arn="arn:...fraud-analyst-role")
-table = read_encrypted_parquet("data.parquet", config, factory)
-
-# Result: all 100 rows, all 6 columns — succeeds
-#   ssn           first_name  last_name  email                      xid       balance
-#   999-01-1001   James       Miller     james.miller@example.com   XID04821  4520.5
-#   ...
+```
+RBAC: Marketing analyst (PCI key DENIED)...
+    Correctly denied: Access denied: kms:Decrypt not allowed for key 'pme-pci-key'
 ```
 
-### Example: Marketing Analyst (PCI denied)
+The read fails entirely. No partial data is returned — even the non-sensitive `xid` and `balance` columns are inaccessible.
 
-```python
-factory = AwsKmsClientFactory(region="us-east-2", role_arn="arn:...marketing-analyst-role")
-table = read_encrypted_parquet("data.parquet", config, factory)
+### Actual result — Junior Analyst (PCI + PII denied)
 
-# Result: PermissionError!
-# "Access denied: kms:Decrypt not allowed for key 'pwe-hackathon-pci-key'"
-#
-# The read fails entirely — no partial data is returned.
-# Even though marketing only wanted email addresses, PyArrow tried to
-# unwrap ALL column keys including PCI, which was denied.
+```
+RBAC: Junior analyst (PCI + PII keys DENIED)...
+    Correctly denied: Access denied: kms:Decrypt not allowed for key 'pme-pii-key'
 ```
 
-### Example: Junior Analyst (PCI + PII denied)
-
-```python
-factory = AwsKmsClientFactory(region="us-east-2", role_arn="arn:...junior-analyst-role")
-table = read_encrypted_parquet("data.parquet", config, factory)
-
-# Result: PermissionError!
-# Denied on first encrypted column group encountered (PCI or PII).
-# Cannot read any data, even the non-sensitive xid and balance columns.
-```
+Denied on the first encrypted column group encountered. No data is returned.
 
 ### How to grant access in AWS
 
@@ -252,111 +239,36 @@ Each role's IAM policy controls which KMS keys it can use:
     "Action": ["kms:Decrypt"],
     "Resource": [
         "arn:aws:kms:us-east-2:651767347247:alias/pwe-hackathon-footer-key",
+        "arn:aws:kms:us-east-2:651767347247:alias/pwe-hackathon-pci-key",
         "arn:aws:kms:us-east-2:651767347247:alias/pwe-hackathon-pii-key"
     ]
 }
 ```
 
-This policy grants PII + footer access but **not** PCI — matching the Marketing Analyst role. Under the all-or-nothing model, this role's reads will fail because PCI access is still required.
+Remove a resource from the list to deny that tier. Under the all-or-nothing model, all three keys must be granted for reads to succeed.
 
 ---
 
-## 6. Code Examples
+## 8. Encrypted Footer Mode
 
-### Write (encrypt) the CSV
+When `plaintext_footer=False`, the footer itself is encrypted — schema discovery without keys is blocked:
 
-```python
-from pme.src.config import PmeConfig, KmsKeyConfig, ColumnGroupConfig
-from pme.src.encryption import write_encrypted_parquet
-from pme.src.kms_client import AwsKmsClientFactory
-
-config = PmeConfig(
-    footer_key=KmsKeyConfig(
-        key_arn="arn:aws:kms:us-east-2:651767347247:alias/pwe-hackathon-footer-key",
-        alias="pwe-hackathon-footer-key",
-    ),
-    column_groups=[
-        ColumnGroupConfig(
-            name="pci",
-            kms_key=KmsKeyConfig(
-                key_arn="arn:aws:kms:us-east-2:651767347247:alias/pwe-hackathon-pci-key",
-                alias="pwe-hackathon-pci-key",
-            ),
-            columns=["ssn"],
-        ),
-        ColumnGroupConfig(
-            name="pii",
-            kms_key=KmsKeyConfig(
-                key_arn="arn:aws:kms:us-east-2:651767347247:alias/pwe-hackathon-pii-key",
-                alias="pwe-hackathon-pii-key",
-            ),
-            columns=["first_name", "last_name", "email"],
-        ),
-    ],
-    region="us-east-2",
-)
-
-factory = AwsKmsClientFactory(region="us-east-2", alias_to_arn=config.alias_to_arn)
-
-# Load CSV into PyArrow Table
-import csv, pyarrow as pa
-rows = []
-with open("Hackathon_customer_data.csv") as f:
-    for row in csv.DictReader(f):
-        row["balance"] = float(row["balance"])
-        rows.append(row)
-table = pa.Table.from_pylist(rows)
-
-# Write encrypted
-write_encrypted_parquet(table, "customer_data.parquet", config, factory)
+```
+Encrypted footer mode (plaintext_footer=False)...
+    Magic bytes: b'PARE' (encrypted footer)
+    File size: 8,589 bytes
+    Schema without keys: NOT readable (footer is encrypted)
+    Read with keys: 100 rows, data matches: True
 ```
 
-### Read (decrypt) the file
-
-```python
-from pme.src.decryption import read_encrypted_parquet
-
-table = read_encrypted_parquet("customer_data.parquet", config, factory)
-
-print(table.to_pandas().head())
-#   first_name last_name          ssn                     email      xid  balance
-# 0      James    Miller  999-01-1001  james.miller@example.com  XID04821  4520.50
-# 1      Maria    Garcia  999-01-1002     m.garcia@testmail.org  XID92103   120.75
-# 2     Robert     Smith  999-01-1003      rsmith88@provider.net  XID55291  8943.20
-```
-
-### Read from S3
-
-```python
-from pme.src.encryption import write_encrypted_to_s3
-from pme.src.decryption import read_encrypted_from_s3
-
-# Write to S3
-write_encrypted_to_s3(table, config, factory, filename="customers.parquet")
-
-# Read from S3
-recovered = read_encrypted_from_s3(config, factory, filename="customers.parquet")
-```
-
-### Inspect metadata without decryption keys
-
-```python
-import pyarrow.parquet as pq
-
-# Works with plaintext_footer=True — no KMS keys needed
-schema = pq.read_schema("customer_data.parquet")
-print(schema)
-# first_name: string
-# last_name: string
-# ssn: string
-# email: string
-# xid: string
-# balance: double
-```
+| Footer Mode | Magic Bytes | Schema without keys | File size |
+|-------------|-------------|---------------------|-----------|
+| `plaintext_footer=True` | `PAR1` | Readable | 8,774 bytes |
+| `plaintext_footer=False` | `PARE` | Not readable | 8,589 bytes |
 
 ---
 
-## 7. Security Summary
+## 9. Security Summary
 
 | Property | Status |
 |----------|--------|
@@ -368,7 +280,7 @@ print(schema)
 | Partial column reads bypass encryption | No — all-or-nothing |
 | Schema discoverable without keys (plaintext footer) | Configurable |
 
-## 8. File Inventory
+## 10. File Inventory
 
 | File | Purpose |
 |------|---------|
@@ -376,6 +288,7 @@ print(schema)
 | `pme/src/encryption.py` | Write pipeline: `write_encrypted_parquet()`, `write_encrypted_to_s3()` |
 | `pme/src/decryption.py` | Read pipeline: `read_encrypted_parquet()`, `read_encrypted_from_s3()` |
 | `pme/src/kms_client.py` | AWS KMS integration: `AwsKmsClient`, `AwsKmsClientFactory` |
+| `pme/demo_read_pipeline.py` | Demo script that produced this report's output |
 | `pme/tests/conftest.py` | Test fixtures: `InMemoryKmsClient`, RBAC role factories |
 | `pme/tests/test_encryption.py` | Write pipeline unit tests |
 | `pme/tests/test_decryption.py` | Read pipeline + RBAC unit tests |
