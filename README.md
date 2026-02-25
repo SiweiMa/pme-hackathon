@@ -20,7 +20,7 @@ Read:   Athena Spark / Snowflake+Lambda → PyArrow decrypt → IAM role governs
 ## Progress
 
 ```
-[========>-----------------------] 33%  (4/12)
+[==================>-------------] 62%  (8/13)
 ```
 
 | Phase | Status |
@@ -29,10 +29,12 @@ Read:   Athena Spark / Snowflake+Lambda → PyArrow decrypt → IAM role governs
 | KMS client (PyArrow ↔ AWS KMS) | :white_check_mark: |
 | Encryption write pipeline | :white_check_mark: |
 | Sample data (`Hackathon_customer_data.csv`) | :white_check_mark: |
-| CI (GitHub Actions, Python 3.10–3.12) | :white_check_mark: |
+| CI/CD (GitHub Actions — tests + Terraform) | :white_check_mark: |
+| AWS infra — KMS keys, IAM RBAC roles, S3 (Terraform) | :white_check_mark: |
+| Athena Spark workgroups + execution role (Terraform) | :white_check_mark: |
+| Integration tests + demo encrypt script | :white_check_mark: |
 | Decryption read pipeline + RBAC | :x: |
-| AWS infra — KMS, IAM, S3 (Terraform) | :x: |
-| Athena Spark + QuickSight | :x: |
+| Athena Spark PME decryption notebook | :x: |
 | Lambda + API Gateway | :x: |
 | Snowflake external functions | :x: |
 | Benchmarks | :x: |
@@ -41,7 +43,18 @@ Read:   Athena Spark / Snowflake+Lambda → PyArrow decrypt → IAM role governs
 
 ```bash
 cd pme && pip install -r requirements.txt
+
+# unit tests (no AWS creds needed)
 python -m pytest tests/ -v -m "not integration"
+
+# integration tests (requires AWS creds + KMS keys)
+python -m pytest tests/ -v -m integration
+
+# encrypt sample data to S3
+python demo_encrypt.py
+
+# inspect an encrypted Parquet file
+python inspect_encrypted.py <path-to-file.parquet>
 ```
 
 ## Docs
