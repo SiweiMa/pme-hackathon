@@ -10,13 +10,17 @@ Decryption flow:
     3. PyArrow decrypts column data locally with plaintext DEK (AES-GCM)
     4. Table returned fully decrypted
 
-RBAC model:
-    Reads are all-or-nothing.  PyArrow's C++ RowGroupReader processes
-    metadata for ALL columns during any read, triggering unwrap_key for
-    every encrypted column group — even if only specific columns are
-    requested via ``columns=``.  If the KMS client denies any key the
-    entire read fails.  Access control is enforced at the IAM/compute
-    layer by granting or denying kms:Decrypt on each CMK.
+RBAC model — partial access with null masking:
+    ``read_with_partial_access`` reads the file with a full-access KMS
+    client and then nulls out columns whose key aliases are in the
+    caller's ``denied_key_aliases`` set.  This provides column-level
+    access control at the application layer: users see the data they
+    are allowed to see, and denied columns come back as null.
+
+    PyArrow's C++ reader decrypts ALL column data (even with
+    ``columns=``), so partial decryption at the crypto layer is not
+    possible.  Application-level masking after a full-access read is
+    the standard pattern for data platforms.
 """
 
 from __future__ import annotations
@@ -123,6 +127,80 @@ def read_encrypted_parquet(
         path,
         table.num_rows,
         table.num_columns,
+    )
+    return table
+
+
+def read_with_partial_access(
+    path: Union[str, Path],
+    config: PmeConfig,
+    kms_client_factory: Callable,
+    *,
+    denied_key_aliases: frozenset[str] = frozenset(),
+    columns: Optional[Sequence[str]] = None,
+) -> pa.Table:
+    """Read a PME-encrypted Parquet file with column-level access control.
+
+    Reads the full file using ``kms_client_factory`` (which must have
+    access to **all** KMS keys), then replaces every column whose
+    encryption key is in ``denied_key_aliases`` with nulls.
+
+    This implements application-level RBAC: the service decrypts the
+    file with full access, and the column masking enforces what each
+    role is allowed to see.
+
+    Parameters
+    ----------
+    path : str or Path
+        Local file path of the encrypted Parquet file.
+    config : PmeConfig
+        Encryption/decryption settings.
+    kms_client_factory : callable
+        Full-access KMS client factory (must be able to decrypt all
+        column groups).
+    denied_key_aliases : frozenset of str
+        KMS key aliases whose columns should be returned as null.
+        Columns encrypted with these keys will contain only nulls.
+    columns : sequence of str, optional
+        Column names to include in the result.
+
+    Returns
+    -------
+    pa.Table
+        The table with denied columns nulled out.
+    """
+    # --- Step 1: full-access read -----------------------------------------
+    table = read_encrypted_parquet(
+        path, config, kms_client_factory, columns=columns,
+    )
+
+    if not denied_key_aliases:
+        return table
+
+    # --- Step 2: determine which columns to null --------------------------
+    denied_columns: set[str] = set()
+    for group in config.column_groups:
+        if group.kms_key.alias in denied_key_aliases:
+            denied_columns.update(group.columns)
+
+    columns_to_null = [c for c in table.column_names if c in denied_columns]
+
+    if not columns_to_null:
+        return table
+
+    # --- Step 3: replace denied columns with nulls ------------------------
+    for col_name in columns_to_null:
+        idx = table.column_names.index(col_name)
+        col_type = table.schema.field(col_name).type
+        null_array = pa.nulls(table.num_rows, type=col_type)
+        table = table.set_column(idx, col_name, null_array)
+
+    logger.info(
+        "Partial-access read from %s (%d rows, %d columns, %d nulled)",
+        path,
+        table.num_rows,
+        table.num_columns,
+        len(columns_to_null),
     )
     return table
 
