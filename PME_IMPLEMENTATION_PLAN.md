@@ -61,38 +61,48 @@ spark.conf.set("spark.hadoop.parquet.encryption.kms.client.class",
 
 ### Read Path 2: QuickSight (Dashboards via Athena Federated Query)
 
+**Important nuance:** Athena SQL (the engine QuickSight uses) and Athena Spark are two different engines. Athena SQL cannot "see" the decryption configurations inside a Spark session. Therefore, for QuickSight to "Direct Query" PME data on the fly, you must use Spark as a translation layer that presents the data to Athena SQL in a way it can understand.
+
 ```
-QuickSight (Direct Query mode)
+S3 (PME-Encrypted Parquet)
+  → Lambda Connector (Decrypts in RAM)
   → Athena SQL View
-  → Athena Federated Query
-  → Lambda Connector (decrypts PME in RAM using KMS)
-  → reads encrypted Parquet from S3
-  → returns decrypted rows to Athena SQL (Trino)
-  → QuickSight renders dashboard
+  → QuickSight (Direct Query)
 ```
 
-**Why a bridge is needed:** QuickSight connects to Athena SQL (Trino engine), NOT Athena Spark. Athena SQL does **not** natively support PME decryption — it cannot pass PME column-keys or footer-keys into its internal Trino config. The two engines (Spark vs SQL) are isolated; views created in one are not visible to the other.
+#### Step 1: The "Semantic" Bridge — Glue Data Catalog
 
-**The Lambda Federated Connector** acts as a "decryption proxy":
+You don't store the decrypted files, but you **do** store the metadata (the table definition) in the Glue Data Catalog.
 
-1. Deploy an Athena Parquet Federated Connector (Lambda function using Hadoop PME libraries).
-2. The connector reads PME files from S3, decrypts in its own RAM using KMS keys.
-3. Create an Athena SQL view pointing to the connector:
+- In Spark: define an external table pointing to the PME-encrypted S3 path. Include the PME decryption configurations in the Spark session metadata.
+- **The problem:** If QuickSight queries this table via Athena SQL, the query will fail because Athena SQL doesn't know how to handle the Parquet encryption footers.
+
+#### Step 2: The "Decryption Proxy" View
+
+To make this work "on the fly" for QuickSight, use a Lambda-based Federated Query:
+
+1. **Define the table in Spark:** Register the PME-encrypted data as a table in the Glue Catalog using the Athena Spark notebook.
+2. **Deploy a Lambda Federated Connector:** Athena has a Federated Query feature. Deploy a Lambda function (AWS provides templates) that uses the Spark/Hadoop libraries to read PME data and decrypt it in memory.
+3. **Create the Athena SQL view:**
    ```sql
    CREATE VIEW "decrypted_pme_view" AS
    SELECT * FROM "lambda_connector"."database"."pme_table";
    ```
-4. QuickSight queries the view in Direct Query mode → Lambda decrypts on-the-fly → results flow to QuickSight.
+4. **Connect QuickSight:** QuickSight queries the view. When the view is triggered, the Lambda connector uses the KMS keys to decrypt the Parquet blocks in memory and passes the results back to Athena, then to QuickSight.
 
-**Zero storage:** Decrypted data exists only in Lambda RAM during query execution. No unencrypted files are ever written to S3.
+#### Why this fits the "No Storage" requirement
 
-**IAM requirements:**
+- **In-Memory Decryption:** The data is decrypted in the Lambda's RAM (the "on the fly" part).
+- **No Intermediate Files:** No unencrypted `.parquet` or `.csv` files are ever written to S3.
+- **Transient Access:** Once the QuickSight dashboard finishes loading, the decrypted data is purged from the Lambda's memory.
 
-| Component | Permission |
-|-----------|-----------|
-| Lambda Connector role | `kms:Decrypt` on the relevant CMKs |
-| QuickSight service role | `kms:Decrypt` on CMKs + S3 read access |
-| Athena SQL | Federated query invoke on the Lambda connector |
+#### Security Implementation
+
+| Component | Requirement |
+|-----------|------------|
+| KMS Policy | Must allow the `AthenaFederationLambdaRole` to `kms:Decrypt` |
+| QuickSight | Connects via Direct Query to the Athena View |
+| S3 | Files remain PME-encrypted at rest |
 
 ### Read Path 3: Lambda Direct (API / Snowflake)
 
@@ -386,36 +396,31 @@ spark.conf.set("spark.hadoop.parquet.encryption.kms.client.class",
 
 **Key difference from Lambda path:** Athena Spark uses JVM Parquet crypto (Hadoop libraries), not PyArrow. Same PME standard, different implementation. Both produce identical RBAC results.
 
-#### Phase 10: QuickSight — Athena Federated Query + Lambda Connector
+#### Phase 10: QuickSight — Glue Catalog + Athena Federated Query + Lambda Connector
 
-QuickSight connects to Athena SQL (Trino), which does NOT support PME natively. A Lambda Federated Connector acts as the decryption bridge.
+Implements Read Path 2 from the Architecture section. Same pattern: Glue Catalog semantic bridge → Lambda decryption proxy → Athena SQL view → QuickSight Direct Query.
 
-**Setup steps:**
+**Implementation steps:**
 
-1. **Deploy Athena Parquet Federated Connector** — a Lambda function that uses Hadoop PME libraries to read and decrypt PME files in its own RAM.
-2. **Register the connector** as an Athena data source (federated catalog).
-3. **Create Athena SQL views** pointing to the connector:
+1. **Register PME table in Glue Catalog** (via Athena Spark notebook):
+   - Define external table pointing to the PME-encrypted S3 path.
+   - Table metadata lives in Glue; encrypted files stay in S3 untouched.
+
+2. **Deploy Lambda Federated Connector:**
+   - Use AWS-provided Athena connector template with Hadoop PME libraries.
+   - Configure connector with KMS key access (via its IAM execution role).
+   - Register as an Athena federated data source.
+
+3. **Create Athena SQL views:**
    ```sql
-   CREATE VIEW "pme_fraud_view" AS
-   SELECT * FROM "pme_connector"."pme_db"."customer_data";
+   CREATE VIEW "decrypted_pme_view" AS
+   SELECT * FROM "lambda_connector"."database"."pme_table";
    ```
-4. **Configure QuickSight**:
+
+4. **Configure QuickSight:**
    - Data source: Athena (pointed at the workgroup with the federated connector).
    - Dataset mode: **Direct Query** (not SPICE) for on-the-fly decryption on every dashboard load.
-   - Grant QuickSight service role `kms:Decrypt` on the relevant CMKs + S3 read access.
-
-**Data flow (zero storage):**
-
-```
-QuickSight dashboard load
-  → Athena SQL query on view
-  → Federated Query invokes Lambda connector
-  → Lambda reads PME Parquet from S3
-  → Decrypts in RAM using KMS keys (per connector IAM role)
-  → Returns decrypted rows to Athena SQL
-  → QuickSight renders dashboard
-  → Lambda memory purged — no decrypted data persisted
-```
+   - Grant QuickSight service role (`aws-quicksight-service-role-v0`) `kms:Decrypt` on CMKs + S3 read access.
 
 **RBAC for QuickSight:** Deploy multiple connectors (one per role) or use a single connector with the broadest access and control visibility via QuickSight row/column-level security.
 
