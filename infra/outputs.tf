@@ -70,3 +70,14 @@ output "athena_workgroup_junior" {
   description = "Athena Spark workgroup for junior analyst"
   value       = aws_athena_workgroup.junior.name
 }
+
+# Glue Data Catalog
+output "glue_database_name" {
+  description = "Glue catalog database for PME-encrypted data"
+  value       = aws_glue_catalog_database.pme.name
+}
+
+output "glue_table_name" {
+  description = "Glue catalog table for PME-encrypted customer data"
+  value       = aws_glue_catalog_table.customer_data.name
+}
