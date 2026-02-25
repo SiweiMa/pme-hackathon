@@ -39,6 +39,11 @@ output "role_write_arn" {
   value       = aws_iam_role.write_role.arn
 }
 
+output "role_athena_spark_execution_arn" {
+  description = "ARN of the Athena Spark execution role"
+  value       = aws_iam_role.athena_spark_execution.arn
+}
+
 # S3
 output "data_bucket_name" {
   description = "Name of the encrypted Parquet data bucket"

@@ -236,3 +236,113 @@ resource "aws_iam_role_policy" "write_role_s3" {
     ]
   })
 }
+
+# =============================================================================
+# athena-spark-execution: shared execution role for Athena Spark workgroups
+# =============================================================================
+
+resource "aws_iam_role" "athena_spark_execution" {
+  name = "pwe-hackathon-athena-spark-execution"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "athena.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "athena_spark_s3" {
+  name = "s3-data-and-results"
+  role = aws_iam_role.athena_spark_execution.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "S3DataAccess"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:ListBucket",
+          "s3:PutObject",
+          "s3:GetBucketLocation",
+        ]
+        Resource = [
+          aws_s3_bucket.data.arn,
+          "${aws_s3_bucket.data.arn}/*",
+        ]
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "athena_spark_athena" {
+  name = "athena-access"
+  role = aws_iam_role.athena_spark_execution.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AthenaAccess"
+        Effect = "Allow"
+        Action = [
+          "athena:GetWorkGroup",
+          "athena:StartCalculationExecution",
+          "athena:GetCalculationExecution",
+          "athena:GetCalculationExecutionStatus",
+          "athena:StopCalculationExecution",
+          "athena:ListCalculationExecutions",
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "athena_spark_glue" {
+  name = "glue-catalog"
+  role = aws_iam_role.athena_spark_execution.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "GlueCatalogAccess"
+        Effect = "Allow"
+        Action = [
+          "glue:GetDatabase",
+          "glue:GetDatabases",
+          "glue:GetTable",
+          "glue:GetTables",
+          "glue:GetPartition",
+          "glue:GetPartitions",
+          "glue:CreateDatabase",
+          "glue:CreateTable",
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "athena_spark_cloudwatch" {
+  name = "cloudwatch-logs"
+  role = aws_iam_role.athena_spark_execution.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "CloudWatchLogs"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+        ]
+        Resource = "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:*"
+      }
+    ]
+  })
+}
