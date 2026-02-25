@@ -6,72 +6,67 @@ Sensitive datasets (PII/PCI) must remain encrypted, but analytics teams need rol
 
 This is a greenfield hackathon project (3 engineers). The deliverable:
 
-- **Encrypt at write time**: PyArrow writes PME Parquet to S3 with column-level encryption.
+- **Encrypt at write time**: Lambda (container image) runs PyArrow PME to write column-level encrypted Parquet to S3.
 - **Keys managed by AWS KMS**: Each column group gets its own CMK; IAM enforces who can decrypt.
-- **Decrypt at read time via Snowflake**: External Function calls Lambda that uses PyArrow + KMS to decrypt on-the-fly; unauthorized users see NULL/masked columns.
-- **Query with standard SQL**: Snowflake queries return decrypted or masked data based on role.
+- **Decrypt at read time via Lambda**: Lambda reads PME Parquet from S3, decrypts on-the-fly based on its execution role's KMS grants; unauthorized columns return NULL.
+- **Query with standard SQL (stretch goal)**: Snowflake External Function calls Lambda for role-based decryption.
 
 ## Architecture
 
-### Write Path
+### Write Path (Lambda Container Image)
 
 ```
-Synthetic Data → PyArrow PME Writer → S3 (PME-Encrypted Parquet)
+S3 event or manual invoke
+  → Lambda (container image with PyArrow)
+  → reads CSV/data from S3
+  → PyArrow PME Writer encrypts columns with per-column KMS keys
+  → writes PME-encrypted Parquet back to S3
 ```
 
 - KMS wraps DEKs per column group (footer key, PCI key, PII key).
 - Only sensitive columns encrypted (`ssn`, `pan` = encrypted; `amount`, `date` = plaintext).
+- Lambda container image avoids the 250 MB zip layer limit (PyArrow is ~150 MB).
+- Lambda execution role has `kms:Encrypt` + `kms:GenerateDataKey` on all 3 CMKs.
 
-### Read Path — Day 2 (Snowflake + Lambda)
+### Read Path (Lambda Container Image)
 
 ```
-Snowflake SQL query
-  → External Function (one per RBAC tier)
-  → API Gateway
-  → Lambda
-  → Lambda reads PME file from S3 with PyArrow + KMS decryption
-  → IAM role determines which KMS keys Lambda can use
-  → Returns decrypted rows to Snowflake
+Direct invoke / API Gateway / Snowflake External Function
+  → Lambda (container image, one per RBAC tier)
+  → PyArrow + CryptoFactory + AwsKmsClient
+  → reads PME Parquet from S3
+  → IAM execution role determines which KMS keys Lambda can decrypt
+  → returns decrypted rows (JSON)
 ```
 
 **RBAC Result:**
 
 | Role | SSN | PAN | Email | Phone | Amount | Date |
 |------|-----|-----|-------|-------|--------|------|
-| Fraud Analyst | ✅ Visible | ✅ Visible | ✅ Visible | ✅ Visible | ✅ Visible | ✅ Visible |
-| Marketing Analyst | ❌ NULL | ❌ NULL | ✅ Visible | ✅ Visible | ✅ Visible | ✅ Visible |
-| Junior Analyst | ❌ NULL | ❌ NULL | ❌ NULL | ❌ NULL | ✅ Visible | ✅ Visible |
+| Fraud Analyst | Visible | Visible | Visible | Visible | Visible | Visible |
+| Marketing Analyst | NULL | NULL | Visible | Visible | Visible | Visible |
+| Junior Analyst | NULL | NULL | NULL | NULL | Visible | Visible |
 
-**Why External Function + Lambda?**
+### Why Lambda Container Image?
 
-Snowflake cannot read PME-encrypted Parquet natively. PME decryption is embedded in the Parquet reader, and Snowflake's reader doesn't support it.
+PyArrow Parquet Modular Encryption (PME) is a C++ feature in PyArrow's native Parquet reader/writer. It is **not** available through Spark's JVM-based Parquet handling. This rules out Athena Spark and EMR Spark as compute options — PySpark's `spark.read.parquet()` cannot trigger PME decryption.
 
-| Approach | PME Support | Persistence | Complexity |
-|----------|-------------|-------------|------------|
-| Snowflake native Parquet | ❌ No PME support | N/A | N/A |
-| External Function + Lambda | ✅ PyArrow decrypts | Zero (on-the-fly) | Medium |
-| Athena Spark (Day 1) | ✅ PyArrow decrypts | Temporary (Glue table) | Low |
+| Approach | PME Support | Why |
+|----------|:-----------:|-----|
+| Athena Spark (PySpark) | No | JVM Parquet reader, no PME support |
+| EMR Spark (PySpark) | No | Same JVM reader limitation |
+| Snowflake native Parquet | No | Snowflake's reader doesn't support PME |
+| **Lambda container image** | **Yes** | Full PyArrow with native C++ PME |
+| Glue Python Shell | Yes | PyArrow available, but heavier setup |
+| AWS Batch (Fargate) | Yes | Full Docker, but more infra overhead |
 
-### Read Path — Day 1 (Athena Spark + QuickSight)
+**Lambda advantages:**
 
-```
-Athena Spark Notebook
-  → PyArrow + CryptoFactory + AwsKmsClient
-  → reads PME Parquet from S3
-  → IAM role (via STS assume-role) determines KMS key access
-  → decrypted DataFrame
-  → Glue table (SSE-KMS, 1-day lifecycle)
-  → QuickSight visualization
-```
-
-**Why Athena Spark for Day 1:**
-
-- No Lambda function needed — PyArrow runs natively in Athena Spark
-- No API Gateway to configure
-- Same decrypt code as local (reuses `src/decryption.py`)
-- QuickSight connects directly to Athena for visualization
-
-**Trade-off:** Athena Spark materializes decrypted data to Glue tables (encrypted at rest with SSE-KMS, 1-day lifecycle auto-delete). The Snowflake + Lambda path (Day 2) decrypts on-the-fly with zero persistence.
+1. Serverless — no infra to manage, near-zero cost for occasional runs.
+2. Container image — install any Python library (PyArrow ~150 MB).
+3. Native IAM/KMS — execution role gets KMS access directly, no credential files.
+4. Triggerable — S3 events, EventBridge schedule, API Gateway, or manual invoke.
+5. 15 min timeout / 10 GB RAM — more than enough for our dataset size.
 
 ## Project Structure
 
@@ -83,35 +78,33 @@ pme/
 │   ├── decryption.py         # Read pipeline: PyArrow decrypt (used by Lambda)
 │   └── config.py             # Column→key mappings, KMS ARNs, S3 paths
 ├── lambda/
-│   ├── handler.py            # Lambda: reads PME from S3, decrypts, returns rows
-│   ├── requirements.txt      # Lambda dependencies (pyarrow, boto3)
-│   └── deploy.sh             # Package + deploy Lambda
+│   ├── Dockerfile            # Container image: Python 3.12 + PyArrow + boto3
+│   ├── handler_encrypt.py    # Lambda: reads CSV from S3, encrypts, writes PME Parquet
+│   ├── handler_decrypt.py    # Lambda: reads PME from S3, decrypts, returns rows
+│   └── requirements.txt      # Lambda dependencies (pyarrow, boto3)
 ├── snowflake/
 │   ├── setup.sql             # API integration, external functions, roles, grants
 │   └── demo_queries.sql      # Demo queries showing RBAC in action
 ├── notebooks/
 │   ├── 01_generate_and_encrypt.ipynb
 │   ├── 02_local_decrypt_rbac.ipynb
-│   ├── 03_benchmark.ipynb
-│   └── 03_athena_spark_decrypt.ipynb    # Athena Spark PME decrypt
-├── athena/
-│   └── spark_notebook.py               # Athena Spark PME decrypt script
-├── quicksight/
-│   └── dashboard_config.json           # QuickSight dashboard config
+│   └── 03_benchmark.ipynb
 ├── infra/
 │   ├── kms.tf                # 3 KMS CMKs (footer, PCI, PII)
 │   ├── iam.tf                # RBAC roles + Lambda execution roles
 │   ├── s3.tf                 # S3 bucket for encrypted data
-│   ├── athena.tf             # Athena Spark workgroup (Day 1)
-│   ├── quicksight.tf         # QuickSight resources (Day 1)
-│   ├── lambda.tf             # Lambda function + API Gateway
+│   ├── lambda.tf             # Lambda functions (container image) + ECR
+│   ├── api_gateway.tf        # API Gateway for Snowflake external functions
 │   └── variables.tf / outputs.tf
 ├── tests/
 │   ├── conftest.py           # InMemoryKmsClient fixture (no AWS needed)
 │   ├── test_kms_client.py
 │   ├── test_encryption.py
 │   ├── test_decryption.py
+│   ├── test_integration.py   # Integration tests with real AWS KMS
 │   └── test_roundtrip.py
+├── demo_encrypt.py           # CLI demo: encrypt sample data to S3
+├── inspect_encrypted.py      # CLI tool: inspect PME Parquet file structure
 ├── requirements.txt
 ├── pyproject.toml
 └── README.md
@@ -119,7 +112,7 @@ pme/
 
 ## Implementation Phases
 
-### DAY 1: Write Path + Athena Spark / QuickSight Read
+### DAY 1: Write Path + Lambda Encrypt/Decrypt + RBAC Demo
 
 #### Phase 1: Project Skeleton + Environment
 
@@ -194,7 +187,7 @@ Additional components:
 3. If IAM role has `kms:Decrypt` on that CMK → KMS returns plaintext DEK → PyArrow decrypts column
 4. If IAM role lacks `kms:Decrypt` → KMS returns `AccessDenied` → PyArrow returns NULL for that column
 
-> This is how RBAC works: the IAM role attached to the compute determines which KMS keys it can unwrap, which determines which columns are visible.
+> This is how RBAC works: the IAM role attached to the Lambda determines which KMS keys it can unwrap, which determines which columns are visible.
 
 - RBAC integration tests against the 3-role matrix.
 - Full roundtrip: generate → encrypt → decrypt → compare.
@@ -211,88 +204,79 @@ Additional components:
 
 Sample data is provided in `Hackathon_customer_data.csv` (columns: `first_name`, `last_name`, `ssn`, `email`, `xid`, `balance`). No data generation step needed.
 
-#### Phase 6a: AWS Infrastructure — Day 1 (Terraform)
+#### Phase 6: AWS Infrastructure (Terraform)
 
 - 3 KMS CMKs: `alias/pme-footer-key`, `alias/pme-pci-key`, `alias/pme-pii-key`.
 - 3 IAM RBAC Roles: `pme-fraud-analyst`, `pme-marketing-analyst`, `pme-junior-analyst`.
-- 1 S3 Bucket: `hackathon-pme-2026` with `pme-data/` prefix.
-- Athena Spark workgroup with 3 IAM-role-bound configurations.
-- QuickSight data source + dashboard resources.
+- 1 Write Role: `kms:Encrypt` + `kms:GenerateDataKey` on all 3 CMKs + S3 read/write.
+- 1 S3 Bucket: encrypted data storage with `pme-data/` prefix.
+- 1 ECR Repository: for Lambda container image.
+- 4 Lambda Functions (container image):
+  - `pwe-hackathon-encrypt`: write role — encrypts data to S3.
+  - `pwe-hackathon-decrypt-fraud`: fraud analyst role — decrypts all columns.
+  - `pwe-hackathon-decrypt-marketing`: marketing role — decrypts PII only.
+  - `pwe-hackathon-decrypt-junior`: junior role — decrypts non-sensitive only.
 
-**Why IAM roles are required on Day 1:**
-
-The entire Day 1 read path demo depends on IAM RBAC roles:
-
-```
-KMS CMKs (Phase 6a)
-  → IAM RBAC Roles with different kms:Decrypt grants (Phase 6a)
-  → Athena Spark workgroups bound to those roles (Phase 7a)
-  → Glue tables with different column visibility (Phase 7a)
-  → QuickSight dashboard showing the difference (Phase 8a)
-```
-
-Remove IAM roles → every workgroup has the same KMS access → no RBAC demo.
-
-**Day 1 IAM resources (required):**
-
-- `pme-fraud-analyst` role → `kms:Decrypt` on all 3 CMKs → sees everything
-- `pme-marketing-analyst` role → `kms:Decrypt` on footer + PII keys only → PCI = NULL
-- `pme-junior-analyst` role → `kms:Decrypt` on footer key only → PCI + PII = NULL
-- Write role (or dev credentials) → `kms:Encrypt` on all 3 CMKs → for encryption pipeline
-
-**Day 2 IAM resources (deferred):**
-
-- 3 Lambda execution roles (one per RBAC tier)
-- API Gateway invoke permissions
-- Snowflake-related IAM trust policies
-
-#### Phase 7a: Athena Spark PME Decryption (Day 1 Read Path)
-
-- Athena Spark notebook reuses `src/decryption.py` (PyArrow + CryptoFactory + AwsKmsClient).
-- 3 Athena Spark workgroups, each bound to a different IAM role:
-  - `pme-fraud` workgroup → `pme-fraud-analyst` role → footer + PCI + PII KMS access → all columns decrypted.
-  - `pme-marketing` workgroup → `pme-marketing-analyst` role → footer + PII KMS access → PCI = NULL.
-  - `pme-junior` workgroup → `pme-junior-analyst` role → footer KMS access only → PCI + PII = NULL.
-- Decrypted results written to Glue tables (SSE-KMS encrypted at rest, 1-day S3 lifecycle auto-delete).
-- **Trade-off:** materializes decrypted data temporarily. Acceptable for hackathon demo; Snowflake path (Day 2) provides zero-persistence decryption.
-
-#### Phase 8a: QuickSight Dashboard (Day 1 Visualization)
-
-- QuickSight connects to Athena SQL → queries Glue tables produced by Athena Spark.
-- Dashboard shows 3 side-by-side panels (one per role):
-  - **Fraud Analyst**: all columns visible (SSN, PAN, email, amount, etc.).
-  - **Marketing Analyst**: PCI columns = NULL, PII visible.
-  - **Junior Analyst**: PCI + PII = NULL, only non-sensitive columns visible.
-- Visual RBAC demo: same underlying data, different column visibility per role.
-
-### DAY 2: Snowflake Read Path + Benchmarks + Polish
-
-#### Phase 6b: AWS Infrastructure — Day 2 (Terraform)
-
-- 3 Lambda Functions: one per RBAC tier with different execution roles.
-- 1 API Gateway: REST API with 3 resource paths (`/decrypt-fraud`, `/decrypt-marketing`, `/decrypt-junior`).
-- 3 Lambda execution IAM roles with tier-specific `KMS:Decrypt` grants.
-
-#### Phase 7b: Lambda Decrypt Function (Day 2 Read Path)
-
-- Lambda handler receives S3 path + requested columns from Snowflake.
-- Reads PME Parquet from S3 using PyArrow + CryptoFactory + AwsKmsClient.
-- KMS permissions come from Lambda execution role (different per RBAC tier).
-- Returns JSON rows to Snowflake via API Gateway response.
-- Deploy script: pip install into package dir, zip, upload.
-
-**Lambda data flow:**
+**Why IAM roles are critical:**
 
 ```
-Snowflake External Function call
-  → API Gateway (POST /decrypt-fraud or /decrypt-marketing or /decrypt-junior)
-  → Lambda (execution role with specific KMS:Decrypt grants)
-  → PyArrow reads PME file from S3, decrypts authorized columns, NULLs the rest
-  → Returns JSON array of rows
-  → Snowflake receives result set
+KMS CMKs
+  → IAM execution roles with different kms:Decrypt grants
+  → Lambda functions bound to those roles
+  → Same PME file, different column visibility per Lambda
 ```
 
-#### Phase 8b: Snowflake Integration
+Remove IAM roles → every Lambda has the same KMS access → no RBAC demo.
+
+#### Phase 7: Lambda Container Image — Encrypt + Decrypt
+
+**Container image:**
+
+- Base: `public.ecr.aws/lambda/python:3.12`
+- Install: `pyarrow`, `boto3`, `pandas`
+- Copy: `src/` modules (kms_client, encryption, decryption, config)
+- Handlers: `handler_encrypt.encrypt_handler` and `handler_decrypt.decrypt_handler`
+
+**Encrypt Lambda (`handler_encrypt.py`):**
+
+1. Triggered by S3 event (new CSV upload) or manual invoke.
+2. Reads CSV from S3 → converts to PyArrow Table.
+3. Calls `write_encrypted_to_s3()` with column→KMS key mappings.
+4. Writes PME-encrypted Parquet to S3 output prefix.
+
+**Decrypt Lambda (`handler_decrypt.py`):**
+
+1. Invoked directly, via API Gateway, or from Snowflake external function.
+2. Receives S3 path of PME Parquet file.
+3. Calls `read_encrypted_parquet()` — execution role determines which columns decrypt.
+4. Returns JSON rows (decrypted columns have values, unauthorized columns are NULL).
+
+**RBAC demo flow:**
+
+```
+Invoke pwe-hackathon-decrypt-fraud   → all columns visible
+Invoke pwe-hackathon-decrypt-marketing → PCI columns = NULL
+Invoke pwe-hackathon-decrypt-junior   → PCI + PII = NULL
+```
+
+Same encrypted file, same code, different IAM role → different column visibility.
+
+#### Phase 8: RBAC Demo + Verification
+
+- Invoke all 3 decrypt Lambdas against the same PME file.
+- Verify column visibility matches the RBAC matrix.
+- Compare output side-by-side to demonstrate the access control.
+- Document results for presentation.
+
+### DAY 2: Snowflake Integration + Benchmarks + Polish
+
+#### Phase 9: API Gateway
+
+- 1 REST API with 3 resource paths: `/decrypt-fraud`, `/decrypt-marketing`, `/decrypt-junior`.
+- Each path integrates with its corresponding Lambda function.
+- API Gateway invoke permissions for Snowflake's IAM principal.
+
+#### Phase 10: Snowflake Integration
 
 - Create API Integration pointing to API Gateway.
 - Create 3 External Functions (one per RBAC tier).
@@ -315,13 +299,13 @@ SELECT t.value:transaction_id::STRING, t.value:ssn::STRING, t.value:amount::FLOA
 FROM TABLE(RESULT_SCAN(pme_decrypt_junior('pme-data/data.parquet'))) t;
 ```
 
-#### Phase 9: Benchmarks + Polish
+#### Phase 11: Benchmarks + Polish
 
 - Encrypted vs. unencrypted write/read at 10K/100K/1M rows.
 - `AES_GCM_V1` vs. `AES_GCM_CTR_V1`.
-- Athena Spark vs. Snowflake external function latency (end-to-end).
+- Lambda cold start vs. warm invoke latency.
 - Benchmark notebook with charts.
-- README with Mermaid architecture diagram.
+- README with architecture diagram.
 
 ## Verification Plan
 
@@ -332,9 +316,10 @@ FROM TABLE(RESULT_SCAN(pme_decrypt_junior('pme-data/data.parquet'))) t;
 | File is encrypted | First 4 bytes = `PARE` (not `PAR1`) |
 | Roundtrip integrity | encrypt → decrypt → `assert table.equals(original)` |
 | RBAC works locally | Assume each role → verify column visibility |
-| Athena Spark RBAC demo | 3 workgroups → 3 different column visibility results |
-| QuickSight dashboard | Visual RBAC comparison across roles |
-| Lambda decrypts correctly | Invoke Lambda with test event → verify JSON |
+| Lambda encrypt works | Invoke encrypt Lambda → verify PARE file in S3 |
+| Lambda decrypt — fraud | Invoke → all columns have values |
+| Lambda decrypt — marketing | Invoke → PCI columns = NULL |
+| Lambda decrypt — junior | Invoke → PCI + PII columns = NULL |
 | Snowflake RBAC demo | Same query as 3 roles → different columns visible |
 | Integration tests | `pytest pme/tests/ -m integration` |
 
@@ -347,18 +332,17 @@ feat: add PME project skeleton with pyproject.toml and requirements
 feat: implement AwsKmsClient wrapping AWS KMS for PyArrow PME
 feat: implement encrypted Parquet write pipeline
 feat: implement encrypted Parquet read pipeline with RBAC degradation
-feat: add Terraform for KMS keys, IAM roles, S3, Athena Spark workgroup
-feat: add Athena Spark notebook for PME decryption with RBAC
-feat: add QuickSight dashboard showing role-based column visibility
-test: add unit tests for PME encryption roundtrip
+feat: add Terraform for KMS keys, IAM roles, S3, ECR, Lambda
+feat: add Lambda container image with encrypt and decrypt handlers
+feat: add RBAC demo invoking 3 decrypt Lambdas side-by-side
+test: add unit and integration tests for PME roundtrip
 ```
 
 ### Day 2
 
 ```
-feat: add Terraform for Lambda functions and API Gateway
-feat: add Lambda decrypt handler for Snowflake external function
+feat: add API Gateway with per-role decrypt endpoints
 feat: add Snowflake setup SQL with API integration and external functions
-feat: add benchmark notebook comparing encrypted vs unencrypted + Athena vs Snowflake
+feat: add benchmark notebook comparing encrypted vs unencrypted
 docs: add README with architecture diagram and demo instructions
 ```
