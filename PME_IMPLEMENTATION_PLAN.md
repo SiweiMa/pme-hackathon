@@ -8,11 +8,7 @@ This is a greenfield hackathon project (3 engineers). The deliverable:
 
 - **Encrypt at write time**: Lambda (container image) runs PyArrow PME to write column-level encrypted Parquet to S3.
 - **Keys managed by AWS KMS**: Each column group gets its own CMK; IAM enforces who can decrypt.
-- **Decrypt at read time — three paths**:
-  - **Athena Spark**: Spark's native PME support decrypts in executor memory; IAM execution role per workgroup controls column visibility.
-  - **QuickSight**: Athena SQL View → Lambda Federated Connector → decrypts in RAM → zero storage.
-  - **Lambda direct**: Lambda container image with PyArrow decrypts on-the-fly; one Lambda per RBAC tier.
-- **Query with standard SQL (stretch goal)**: Snowflake External Function calls Lambda for role-based decryption.
+- **Decrypt at read time via QuickSight**: Athena SQL View → Lambda Federated Connector → decrypts PME in RAM → zero storage → QuickSight Direct Query dashboard.
 
 ## Architecture
 
@@ -31,37 +27,9 @@ S3 event or manual invoke
 - Lambda container image avoids the 250 MB zip layer limit (PyArrow is ~150 MB).
 - Lambda execution role has `kms:Encrypt` + `kms:GenerateDataKey` on all 3 CMKs.
 
-### Read Path 1: Athena Spark (Interactive / Notebook)
+### Read Path: QuickSight via Athena Federated Query
 
-```
-Athena Spark Notebook
-  → Spark session configured with parquet.crypto.factory.class
-  → spark.read.parquet("s3://bucket/pme-data/")
-  → Spark executor decrypts PME columns in memory using KMS
-  → IAM execution role (per workgroup) determines which keys are accessible
-  → decrypted DataFrame available for queries — never written to S3
-```
-
-**How it works:** Apache Spark's JVM-based Parquet reader has native PME support via `parquet.crypto.factory.class`. This is separate from PyArrow — Spark handles decryption at the executor level using Hadoop's Parquet crypto libraries. Athena Spark uses a managed Spark engine that supports this.
-
-**Key Spark session config:**
-
-```python
-spark.conf.set("spark.hadoop.parquet.crypto.factory.class",
-               "org.apache.parquet.crypto.keytools.PropertiesDrivenCryptoFactory")
-spark.conf.set("spark.hadoop.parquet.encryption.kms.client.class",
-               "org.apache.parquet.crypto.keytools.AwsKmsClient")
-```
-
-**RBAC via workgroups:** 3 Athena Spark workgroups, each bound to a different IAM execution role:
-
-- `pwe-hackathon-pme-fraud` → fraud analyst role → `kms:Decrypt` on all 3 CMKs → all columns visible
-- `pwe-hackathon-pme-marketing` → marketing role → `kms:Decrypt` on footer + PII keys → PCI = NULL
-- `pwe-hackathon-pme-junior` → junior role → `kms:Decrypt` on footer key only → PCI + PII = NULL
-
-### Read Path 2: QuickSight (Dashboards via Athena Federated Query)
-
-**Important nuance:** Athena SQL (the engine QuickSight uses) and Athena Spark are two different engines. Athena SQL cannot "see" the decryption configurations inside a Spark session. Therefore, for QuickSight to "Direct Query" PME data on the fly, you must use Spark as a translation layer that presents the data to Athena SQL in a way it can understand.
+**Important nuance:** Athena SQL (the engine QuickSight uses) and Athena Spark are two different engines. Athena SQL cannot "see" the decryption configurations inside a Spark session. Therefore, for QuickSight to "Direct Query" PME data on the fly, you must use a Lambda Federated Connector as a translation layer that presents the data to Athena SQL in a way it can understand.
 
 ```
 S3 (PME-Encrypted Parquet)
@@ -74,14 +42,14 @@ S3 (PME-Encrypted Parquet)
 
 You don't store the decrypted files, but you **do** store the metadata (the table definition) in the Glue Data Catalog.
 
-- In Spark: define an external table pointing to the PME-encrypted S3 path. Include the PME decryption configurations in the Spark session metadata.
+- Register the PME-encrypted data as a table in the Glue Catalog, pointing to the S3 path.
 - **The problem:** If QuickSight queries this table via Athena SQL, the query will fail because Athena SQL doesn't know how to handle the Parquet encryption footers.
 
 #### Step 2: The "Decryption Proxy" View
 
 To make this work "on the fly" for QuickSight, use a Lambda-based Federated Query:
 
-1. **Define the table in Spark:** Register the PME-encrypted data as a table in the Glue Catalog using the Athena Spark notebook.
+1. **Register the table in Glue Catalog:** Define the PME-encrypted data as a Glue table pointing to the S3 path.
 2. **Deploy a Lambda Federated Connector:** Athena has a Federated Query feature. Deploy a Lambda function (AWS provides templates) that uses the Spark/Hadoop libraries to read PME data and decrypt it in memory.
 3. **Create the Athena SQL view:**
    ```sql
@@ -104,20 +72,7 @@ To make this work "on the fly" for QuickSight, use a Lambda-based Federated Quer
 | QuickSight | Connects via Direct Query to the Athena View |
 | S3 | Files remain PME-encrypted at rest |
 
-### Read Path 3: Lambda Direct (API / Snowflake)
-
-```
-Direct invoke / API Gateway / Snowflake External Function
-  → Lambda (container image, one per RBAC tier)
-  → PyArrow + CryptoFactory + AwsKmsClient
-  → reads PME Parquet from S3
-  → IAM execution role determines which KMS keys Lambda can decrypt
-  → returns decrypted rows (JSON)
-```
-
-This path uses PyArrow's native C++ PME (not Spark). Used for programmatic access and Snowflake integration.
-
-### RBAC Result (all read paths)
+### RBAC Result
 
 | Role | SSN | PAN | Email | Phone | Amount | Date |
 |------|-----|-----|-------|-------|--------|------|
@@ -125,16 +80,17 @@ This path uses PyArrow's native C++ PME (not Spark). Used for programmatic acces
 | Marketing Analyst | NULL | NULL | Visible | Visible | Visible | Visible |
 | Junior Analyst | NULL | NULL | NULL | NULL | Visible | Visible |
 
+RBAC is controlled by the Lambda connector's IAM execution role — different connectors (or a single connector with QuickSight row/column-level security) determine which KMS keys are accessible and therefore which columns are decrypted.
+
 ### PME Support by Compute Option
 
 | Approach | PME Support | How |
 |----------|:-----------:|-----|
-| **Athena Spark** | **Yes** | Spark's native JVM Parquet crypto (`parquet.crypto.factory.class`) |
-| **Lambda container image** | **Yes** | PyArrow native C++ PME |
-| **Athena SQL (Trino)** | **No** | Managed Athena SQL doesn't expose PME key config |
 | **QuickSight via Federated Query** | **Yes** | Lambda connector decrypts in RAM, Athena SQL view bridges to QuickSight |
+| Lambda container image | Yes | PyArrow native C++ PME |
+| Athena Spark | Yes | Spark's native JVM Parquet crypto (`parquet.crypto.factory.class`) |
+| Athena SQL (Trino) | No | Managed Athena SQL doesn't expose PME key config |
 | Snowflake native Parquet | No | Snowflake's reader doesn't support PME |
-| Glue Python Shell | Yes | PyArrow available, but heavier setup |
 
 ## Project Structure
 
@@ -158,20 +114,17 @@ This path uses PyArrow's native C++ PME (not Spark). Used for programmatic acces
 ├── lambda/
 │   ├── Dockerfile                # Container image: Python 3.12 + PyArrow + s3fs
 │   ├── handler.py                # Lambda: reads CSV from S3, encrypts, writes PME Parquet
-│   ├── handler_decrypt.py        # Lambda: reads PME from S3, decrypts, returns rows
 │   ├── deploy.sh                 # Build, push to ECR, update Lambda function
 │   └── requirements.txt          # Lambda-only deps (pyarrow, s3fs — boto3 pre-installed)
-├── athena/
-│   └── spark_pme_decrypt.py      # Athena Spark notebook: PME config + RBAC demo queries
 ├── infra/
 │   ├── main.tf                   # Provider + S3 backend
 │   ├── variables.tf              # Input variables
 │   ├── kms.tf                    # 3 KMS CMKs (footer, PCI, PII)
-│   ├── iam.tf                    # RBAC roles (fraud/marketing/junior/write)
+│   ├── iam.tf                    # RBAC roles + Lambda/connector execution roles
 │   ├── s3.tf                     # S3 bucket for encrypted data
 │   ├── lambda.tf                 # ECR + Lambda encrypt function + IAM execution role
-│   ├── athena.tf                 # Athena Spark workgroups (PME-capable, per-role)
-│   ├── federated.tf              # Athena Federated Connector Lambda for QuickSight path
+│   ├── federated.tf              # Athena Federated Connector Lambda (decryption proxy)
+│   ├── glue.tf                   # Glue Data Catalog table (PME metadata)
 │   ├── quicksight.tf             # QuickSight data source + Athena SQL view
 │   └── outputs.tf
 ├── Hackathon_customer_data.csv   # Synthetic sample data (100 rows)
@@ -185,20 +138,18 @@ This path uses PyArrow's native C++ PME (not Spark). Used for programmatic acces
 | Phase 1 | Project skeleton + environment | DONE |
 | Phase 2 | Core KMS client | DONE |
 | Phase 3 | Encrypt (write pipeline) | DONE |
-| Phase 4 | Decrypt (read pipeline) + RBAC | TODO |
-| Phase 5 | Sample data | DONE |
-| Phase 6 | AWS infrastructure (Terraform) | DONE |
-| Phase 7 | Lambda container image — encrypt | DONE |
-| Phase 8 | Lambda decrypt + RBAC demo | TODO |
-| Phase 9 | Athena Spark — PME decryption notebooks | TODO |
-| Phase 10 | QuickSight — Athena Federated Query + Lambda connector | TODO |
-| Phase 11 | API Gateway | TODO |
-| Phase 12 | Snowflake integration | TODO |
-| Phase 13 | Benchmarks + polish | TODO |
+| Phase 4 | Sample data | DONE |
+| Phase 5 | AWS infrastructure (Terraform) | DONE |
+| Phase 6 | Lambda container image — encrypt | DONE |
+| Phase 7 | Glue Data Catalog — register PME table metadata | TODO |
+| Phase 8 | Lambda Federated Connector — decryption proxy | TODO |
+| Phase 9 | Athena SQL view + QuickSight Direct Query | TODO |
+| Phase 10 | RBAC demo (3 roles, same dashboard) | TODO |
+| Phase 11 | Benchmarks + polish | TODO |
 
 ## Implementation Phases
 
-### DAY 1: Write Path + Lambda Encrypt/Decrypt + RBAC Demo
+### DAY 1: Write Path + Lambda Encrypt + QuickSight Read Path
 
 #### Phase 1: Project Skeleton + Environment — DONE
 
@@ -261,36 +212,11 @@ Additional components:
 - `internal_key_material=True` (wrapped DEKs in Parquet footer).
 - `cache_lifetime=10 minutes` (reduces KMS API calls).
 
-#### Phase 4: Decrypt (Read Pipeline) + RBAC
-
-- `read_encrypted_parquet(path, config, role_arn=None)`.
-- Graceful degradation: failed decryption → null arrays for those columns.
-
-**Decryption flow (what happens when PyArrow reads an encrypted column):**
-
-1. PyArrow reads the Parquet footer → finds wrapped DEK for the column group
-2. `KmsClient.unwrap_key(wrapped_DEK, "arn:aws:kms:.../alias/pme-pci-key")` → sends to KMS
-3. If IAM role has `kms:Decrypt` on that CMK → KMS returns plaintext DEK → PyArrow decrypts column
-4. If IAM role lacks `kms:Decrypt` → KMS returns `AccessDenied` → PyArrow returns NULL for that column
-
-> This is how RBAC works: the IAM role attached to the Lambda determines which KMS keys it can unwrap, which determines which columns are visible.
-
-- RBAC integration tests against the 3-role matrix.
-- Full roundtrip: generate → encrypt → decrypt → compare.
-
-**RBAC matrix (3 KMS keys × 3 IAM roles):**
-
-| Role | Footer Key | PCI Key | PII Key | Visibility |
-|------|-----------|---------|---------|------------|
-| `pme-fraud-analyst` | Decrypt | Decrypt | Decrypt | Sees ALL |
-| `pme-marketing-analyst` | Decrypt | DENY | Decrypt | Sees PII, not PCI |
-| `pme-junior-analyst` | Decrypt | DENY | DENY | Sees non-sensitive only |
-
-#### Phase 5: Sample Data — DONE
+#### Phase 4: Sample Data — DONE
 
 Sample data is provided in `Hackathon_customer_data.csv` (columns: `first_name`, `last_name`, `ssn`, `email`, `xid`, `balance`). No data generation step needed. CSV is uploaded to `s3://pwe-hackathon-pme-data-651767347247/raw-data/`.
 
-#### Phase 6: AWS Infrastructure (Terraform) — DONE
+#### Phase 5: AWS Infrastructure (Terraform) — DONE
 
 All infrastructure is deployed in `us-east-2` (account `651767347247`):
 
@@ -301,25 +227,14 @@ All infrastructure is deployed in `us-east-2` (account `651767347247`):
 - 1 ECR Repository: `pwe-hackathon-pme-lambda`.
 - 1 Lambda Function (container image): `pwe-hackathon-pme-encrypt` (1536 MB, 300s timeout).
 - 1 CloudWatch log group: `/aws/lambda/pwe-hackathon-pme-encrypt` (7-day retention).
-- 3 Athena Spark workgroups: fraud, marketing, junior analyst.
 
-**Remaining Lambda functions (decrypt) to be added:**
-  - `pwe-hackathon-decrypt-fraud`: fraud analyst role — decrypts all columns.
-  - `pwe-hackathon-decrypt-marketing`: marketing role — decrypts PII only.
-  - `pwe-hackathon-decrypt-junior`: junior role — decrypts non-sensitive only.
+**Remaining infra (for read path) to be added:**
+  - Lambda Federated Connector (decryption proxy for Athena SQL).
+  - Glue Data Catalog table (PME metadata registration).
+  - QuickSight data source + Athena SQL view.
+  - IAM roles for the federated connector with tier-specific `kms:Decrypt` grants.
 
-**Why IAM roles are critical:**
-
-```
-KMS CMKs
-  → IAM execution roles with different kms:Decrypt grants
-  → Lambda functions bound to those roles
-  → Same PME file, different column visibility per Lambda
-```
-
-Remove IAM roles → every Lambda has the same KMS access → no RBAC demo.
-
-#### Phase 7: Lambda Container Image — Encrypt — DONE
+#### Phase 6: Lambda Container Image — Encrypt — DONE
 
 **Container image (deployed to ECR):**
 
@@ -347,119 +262,71 @@ $ aws lambda invoke --function-name pwe-hackathon-pme-encrypt --payload '{}' /de
 {"statusCode": 200, "body": {"output_s3_uri": "s3://pwe-hackathon-pme-data-651767347247/pme-data/customer_data_encrypted.parquet", "rows_encrypted": 100, "columns_encrypted": ["ssn", "first_name", "last_name", "email"]}}
 ```
 
-**Decrypt Lambda — TODO:**
+#### Phase 7: Glue Data Catalog — Register PME Table Metadata
 
-- Separate handler for reading PME Parquet and decrypting based on execution role
-- One Lambda per RBAC tier (fraud/marketing/junior), each with different IAM execution role
-- Returns JSON rows; unauthorized columns return NULL
+- Create a Glue database and table definition pointing to the PME-encrypted S3 path.
+- Table metadata only — no decrypted files stored. Encrypted Parquet stays in S3 untouched.
+- Schema matches the CSV columns: `first_name`, `last_name`, `ssn`, `email`, `xid`, `balance`.
+- Terraform resource in `glue.tf`.
 
-**RBAC demo flow (planned):**
+#### Phase 8: Lambda Federated Connector — Decryption Proxy
 
-```
-Invoke pwe-hackathon-decrypt-fraud   → all columns visible
-Invoke pwe-hackathon-decrypt-marketing → PCI columns = NULL
-Invoke pwe-hackathon-decrypt-junior   → PCI + PII = NULL
-```
+Deploy the Athena Federated Connector that acts as the "decryption proxy":
 
-Same encrypted file, same code, different IAM role → different column visibility.
+- Use AWS-provided Athena connector template with Hadoop PME libraries.
+- The connector reads PME files from S3, decrypts in its own RAM using KMS keys.
+- Configure connector IAM execution role with `kms:Decrypt` on the relevant CMKs.
+- Register as an Athena federated data source.
+- Terraform resource in `federated.tf`.
 
-#### Phase 8: Lambda Decrypt + RBAC Demo
+**Decryption flow (what happens when a query hits the connector):**
 
-- Invoke all 3 decrypt Lambdas against the same PME file.
-- Verify column visibility matches the RBAC matrix.
-- Compare output side-by-side to demonstrate the access control.
-- Document results for presentation.
+1. Athena SQL sends the query to the Lambda connector via Federated Query.
+2. Lambda reads the PME Parquet footer → finds wrapped DEKs for each column group.
+3. Lambda calls KMS to unwrap DEKs — IAM execution role determines which keys succeed.
+4. If `kms:Decrypt` is granted → column decrypted in RAM. If denied → column returns NULL.
+5. Decrypted rows returned to Athena SQL → forwarded to QuickSight.
+6. Lambda memory purged — no decrypted data persisted.
 
-#### Phase 9: Athena Spark — PME Decryption Notebooks
+**RBAC approach:** Deploy multiple connectors (one per role) or use a single connector with the broadest access and control column visibility via QuickSight row/column-level security.
 
-Athena Spark's managed Spark engine supports PME natively via `parquet.crypto.factory.class`. Decryption happens in executor memory — no files are written to S3.
+#### Phase 9: Athena SQL View + QuickSight Direct Query
 
-**Spark session configuration:**
-
-```python
-# Set in Athena Spark notebook
-spark.conf.set("spark.hadoop.parquet.crypto.factory.class",
-               "org.apache.parquet.crypto.keytools.PropertiesDrivenCryptoFactory")
-spark.conf.set("spark.hadoop.parquet.encryption.kms.client.class",
-               "org.apache.parquet.crypto.keytools.AwsKmsClient")
-# KMS key IDs are resolved from the Parquet footer;
-# IAM execution role on the workgroup determines decrypt access
-```
-
-**3 workgroups, 3 notebooks, 3 results:**
-
-| Workgroup | Execution Role | KMS Access | Column Visibility |
-|-----------|---------------|------------|-------------------|
-| `pwe-hackathon-pme-fraud` | fraud analyst | All 3 CMKs | All columns |
-| `pwe-hackathon-pme-marketing` | marketing analyst | Footer + PII | PCI = NULL |
-| `pwe-hackathon-pme-junior` | junior analyst | Footer only | PCI + PII = NULL |
-
-**Key difference from Lambda path:** Athena Spark uses JVM Parquet crypto (Hadoop libraries), not PyArrow. Same PME standard, different implementation. Both produce identical RBAC results.
-
-#### Phase 10: QuickSight — Glue Catalog + Athena Federated Query + Lambda Connector
-
-Implements Read Path 2 from the Architecture section. Same pattern: Glue Catalog semantic bridge → Lambda decryption proxy → Athena SQL view → QuickSight Direct Query.
-
-**Implementation steps:**
-
-1. **Register PME table in Glue Catalog** (via Athena Spark notebook):
-   - Define external table pointing to the PME-encrypted S3 path.
-   - Table metadata lives in Glue; encrypted files stay in S3 untouched.
-
-2. **Deploy Lambda Federated Connector:**
-   - Use AWS-provided Athena connector template with Hadoop PME libraries.
-   - Configure connector with KMS key access (via its IAM execution role).
-   - Register as an Athena federated data source.
-
-3. **Create Athena SQL views:**
+1. **Create Athena SQL view** wrapping the federated connector:
    ```sql
    CREATE VIEW "decrypted_pme_view" AS
    SELECT * FROM "lambda_connector"."database"."pme_table";
    ```
 
-4. **Configure QuickSight:**
+2. **Configure QuickSight:**
    - Data source: Athena (pointed at the workgroup with the federated connector).
-   - Dataset mode: **Direct Query** (not SPICE) for on-the-fly decryption on every dashboard load.
+   - Dataset mode: **Direct Query** (not SPICE) — decryption happens on-the-fly on every dashboard load.
    - Grant QuickSight service role (`aws-quicksight-service-role-v0`) `kms:Decrypt` on CMKs + S3 read access.
 
-**RBAC for QuickSight:** Deploy multiple connectors (one per role) or use a single connector with the broadest access and control visibility via QuickSight row/column-level security.
+3. **Terraform:** `quicksight.tf` for data source and view resources.
 
-### DAY 2: Snowflake Integration + Benchmarks + Polish
+#### Phase 10: RBAC Demo (3 Roles, Same Dashboard)
 
-#### Phase 11: API Gateway
+- Configure 3 connector variants (or QuickSight RLS) so each role sees different columns.
+- Verify column visibility matches the RBAC matrix:
 
-- 1 REST API with 3 resource paths: `/decrypt-fraud`, `/decrypt-marketing`, `/decrypt-junior`.
-- Each path integrates with its corresponding Lambda function.
-- API Gateway invoke permissions for Snowflake's IAM principal.
+| Role | Footer Key | PCI Key | PII Key | Visibility |
+|------|-----------|---------|---------|------------|
+| `pme-fraud-analyst` | Decrypt | Decrypt | Decrypt | Sees ALL |
+| `pme-marketing-analyst` | Decrypt | DENY | Decrypt | Sees PII, not PCI |
+| `pme-junior-analyst` | Decrypt | DENY | DENY | Sees non-sensitive only |
 
-#### Phase 12: Snowflake Integration
+- Compare output side-by-side on the QuickSight dashboard.
+- Document results for presentation.
 
-- Create API Integration pointing to API Gateway.
-- Create 3 External Functions (one per RBAC tier).
-- Create 3 Snowflake roles mapped to the external functions.
-- Grant each role access to only its external function.
-- Create wrapper view that auto-selects function based on `CURRENT_ROLE()`.
-- Demo queries: same table, different roles, different column visibility.
+### DAY 2: Benchmarks + Polish
 
-**Example Snowflake SQL:**
-
-```sql
--- fraud analyst sees everything
-USE ROLE pme_fraud_analyst;
-SELECT t.value:transaction_id::STRING, t.value:ssn::STRING, t.value:amount::FLOAT
-FROM TABLE(RESULT_SCAN(pme_decrypt_fraud('pme-data/data.parquet'))) t;
-
--- junior analyst sees NULLs for sensitive columns
-USE ROLE pme_junior_analyst;
-SELECT t.value:transaction_id::STRING, t.value:ssn::STRING, t.value:amount::FLOAT
-FROM TABLE(RESULT_SCAN(pme_decrypt_junior('pme-data/data.parquet'))) t;
-```
-
-#### Phase 13: Benchmarks + Polish
+#### Phase 11: Benchmarks + Polish
 
 - Encrypted vs. unencrypted write/read at 10K/100K/1M rows.
 - `AES_GCM_V1` vs. `AES_GCM_CTR_V1`.
-- Lambda cold start vs. warm invoke latency.
+- Lambda connector cold start vs. warm invoke latency.
+- QuickSight dashboard load time with PME decryption.
 - Benchmark notebook with charts.
 - README with architecture diagram.
 
@@ -473,13 +340,12 @@ FROM TABLE(RESULT_SCAN(pme_decrypt_junior('pme-data/data.parquet'))) t;
 | Roundtrip integrity | encrypt → decrypt → `assert table.equals(original)` | DONE |
 | RBAC works locally | Assume each role → verify column visibility | DONE |
 | Lambda encrypt works | `aws lambda invoke --function-name pwe-hackathon-pme-encrypt --payload '{}'` → 100 rows encrypted to S3 | DONE |
-| Lambda decrypt — fraud | Invoke → all columns have values | TODO |
-| Lambda decrypt — marketing | Invoke → PCI columns = NULL | TODO |
-| Lambda decrypt — junior | Invoke → PCI + PII columns = NULL | TODO |
-| Athena Spark — fraud workgroup | `spark.read.parquet()` → all columns decrypted | TODO |
-| Athena Spark — junior workgroup | `spark.read.parquet()` → PCI + PII = NULL | TODO |
-| QuickSight via Federated Query | Direct Query dashboard loads decrypted data on-the-fly | TODO |
-| Snowflake RBAC demo | Same query as 3 roles → different columns visible | TODO |
+| Glue table registered | Table visible in Glue Data Catalog pointing to S3 PME path | TODO |
+| Federated connector deployed | Lambda connector can read and decrypt PME files in memory | TODO |
+| Athena SQL view works | `SELECT * FROM "decrypted_pme_view"` returns decrypted rows | TODO |
+| QuickSight Direct Query | Dashboard loads with decrypted data on-the-fly | TODO |
+| QuickSight RBAC — fraud | All columns visible on dashboard | TODO |
+| QuickSight RBAC — junior | PCI + PII columns = NULL on dashboard | TODO |
 | Integration tests | `pytest pme/tests/ -m integration` | DONE |
 
 ## Commit Strategy (Conventional Commits)
@@ -490,20 +356,18 @@ FROM TABLE(RESULT_SCAN(pme_decrypt_junior('pme-data/data.parquet'))) t;
 feat: add PME project skeleton with pyproject.toml and requirements
 feat: implement AwsKmsClient wrapping AWS KMS for PyArrow PME
 feat: implement encrypted Parquet write pipeline
-feat: implement encrypted Parquet read pipeline with RBAC degradation
 feat: add Terraform for KMS keys, IAM roles, S3, ECR, Lambda
-feat: add Lambda container image with encrypt and decrypt handlers
-feat: add RBAC demo invoking 3 decrypt Lambdas side-by-side
-feat: add Athena Spark PME decryption notebooks with per-role workgroups
-feat: add QuickSight integration via Athena Federated Query + Lambda connector
+feat: add Lambda container image for encrypt handler
+feat: add Glue Data Catalog table for PME metadata
+feat: add Lambda Federated Connector for PME decryption proxy
+feat: add Athena SQL view + QuickSight Direct Query integration
+feat: add RBAC demo with 3 roles on QuickSight dashboard
 test: add unit and integration tests for PME roundtrip
 ```
 
 ### Day 2
 
 ```
-feat: add API Gateway with per-role decrypt endpoints
-feat: add Snowflake setup SQL with API integration and external functions
 feat: add benchmark notebook comparing encrypted vs unencrypted
 docs: add README with architecture diagram and demo instructions
 ```
