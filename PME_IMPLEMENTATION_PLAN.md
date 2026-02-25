@@ -318,9 +318,35 @@ S3 (Encrypted)
   → QuickSight
 ```
 
-**RBAC approach:** Deploy 3 connectors (one per role), each with a different IAM execution role that has different `kms:Decrypt` grants. Or use a single connector with the broadest access and control column visibility via QuickSight row/column-level security.
+##### RBAC Implementation — 3 Connectors, 3 Roles
 
-**Terraform:** `federated.tf` for the connector Lambda + IAM roles.
+Deploy 3 Lambda Federated Connectors, each with a different IAM execution role. Same connector code, different KMS grants → different column visibility.
+
+| Connector | IAM Execution Role | Footer Key | PCI Key | PII Key | Column Visibility |
+|-----------|-------------------|:----------:|:-------:|:-------:|-------------------|
+| `pwe-hackathon-connector-fraud` | `pwe-hackathon-fraud-analyst` | Decrypt | Decrypt | Decrypt | All columns visible |
+| `pwe-hackathon-connector-marketing` | `pwe-hackathon-marketing-analyst` | Decrypt | DENY | Decrypt | PCI = NULL |
+| `pwe-hackathon-connector-junior` | `pwe-hackathon-junior-analyst` | Decrypt | DENY | DENY | PCI + PII = NULL |
+
+Each connector is registered as a separate Athena federated data source, with a corresponding Athena SQL view:
+
+```sql
+-- Fraud analyst view (all columns decrypted)
+CREATE VIEW "pme_fraud_view" AS
+SELECT * FROM "connector_fraud"."pme_db"."customer_data";
+
+-- Marketing analyst view (PCI columns = NULL)
+CREATE VIEW "pme_marketing_view" AS
+SELECT * FROM "connector_marketing"."pme_db"."customer_data";
+
+-- Junior analyst view (PCI + PII columns = NULL)
+CREATE VIEW "pme_junior_view" AS
+SELECT * FROM "connector_junior"."pme_db"."customer_data";
+```
+
+QuickSight datasets point to the appropriate view based on the user's role. Same encrypted file on S3, same connector code, different IAM role → different columns visible on the dashboard.
+
+**Terraform:** `federated.tf` for the 3 connector Lambdas + IAM execution roles.
 
 #### Phase 9: Athena SQL View + QuickSight Direct Query
 
