@@ -57,6 +57,7 @@ AWS access is allowed, but existing resources are **off-limits**. Follow these r
 - Never log, print, or echo credential values to stdout/stderr.
 - Never commit any file from `/tmp/credentials/` or inline their contents anywhere in the codebase.
 - If a script or config needs a credential, reference the file path (e.g., `/tmp/credentials/aws_access_key`) rather than the value itself.
+- **Credentials are IAM user access keys** (long-lived). They do not expire automatically, but must still be kept secret. On any `AccessDenied` or `InvalidClientTokenId` error, verify the key is correct and has the required permissions before retrying.
 
 ## Development Defaults
 
