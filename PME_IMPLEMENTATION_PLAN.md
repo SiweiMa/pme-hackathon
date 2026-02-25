@@ -142,10 +142,8 @@ RBAC is controlled by the Lambda connector's IAM execution role — different co
 | Phase 5 | AWS infrastructure (Terraform) | DONE |
 | Phase 6 | Lambda container image — encrypt | DONE |
 | Phase 7 | Glue Data Catalog — register PME table metadata | TODO |
-| Phase 8 | Lambda Federated Connector — decryption proxy | TODO |
-| Phase 9 | Athena SQL view + QuickSight Direct Query | TODO |
-| Phase 10 | RBAC demo (3 roles, same dashboard) | TODO |
-| Phase 11 | Benchmarks + polish | TODO |
+| Phase 8 | QuickSight read path — Federated Connector + RBAC | TODO |
+| Phase 9 | Benchmarks + polish | TODO |
 
 ## Implementation Phases
 
@@ -346,40 +344,19 @@ SELECT * FROM "connector_junior"."pme_db"."customer_data";
 
 QuickSight datasets point to the appropriate view based on the user's role. Same encrypted file on S3, same connector code, different IAM role → different columns visible on the dashboard.
 
-**Terraform:** `federated.tf` for the 3 connector Lambdas + IAM execution roles.
+**Terraform:** `federated.tf` for the 3 connector Lambdas + IAM execution roles. `quicksight.tf` for QuickSight data source and view resources.
 
-#### Phase 9: Athena SQL View + QuickSight Direct Query
+##### QuickSight Configuration
 
-1. **Create Athena SQL view** wrapping the federated connector:
-   ```sql
-   CREATE VIEW "decrypted_pme_view" AS
-   SELECT * FROM "lambda_connector"."database"."pme_table";
-   ```
-
-2. **Configure QuickSight:**
-   - Data source: Athena (pointed at the workgroup with the federated connector).
-   - Dataset mode: **Direct Query** (not SPICE) — decryption happens on-the-fly on every dashboard load.
-   - Grant QuickSight service role (`aws-quicksight-service-role-v0`) `kms:Decrypt` on CMKs + S3 read access.
-
-3. **Terraform:** `quicksight.tf` for data source and view resources.
-
-#### Phase 10: RBAC Demo (3 Roles, Same Dashboard)
-
-- Configure 3 connector variants (or QuickSight RLS) so each role sees different columns.
-- Verify column visibility matches the RBAC matrix:
-
-| Role | Footer Key | PCI Key | PII Key | Visibility |
-|------|-----------|---------|---------|------------|
-| `pme-fraud-analyst` | Decrypt | Decrypt | Decrypt | Sees ALL |
-| `pme-marketing-analyst` | Decrypt | DENY | Decrypt | Sees PII, not PCI |
-| `pme-junior-analyst` | Decrypt | DENY | DENY | Sees non-sensitive only |
-
-- Compare output side-by-side on the QuickSight dashboard.
+- Data source: Athena (pointed at the workgroup with the federated connectors).
+- Dataset mode: **Direct Query** (not SPICE) — decryption happens on-the-fly on every dashboard load.
+- Grant QuickSight service role (`aws-quicksight-service-role-v0`) `kms:Decrypt` on CMKs + S3 read access.
+- Compare output side-by-side on the QuickSight dashboard to demonstrate RBAC.
 - Document results for presentation.
 
 ### DAY 2: Benchmarks + Polish
 
-#### Phase 11: Benchmarks + Polish
+#### Phase 9: Benchmarks + Polish
 
 - Encrypted vs. unencrypted write/read at 10K/100K/1M rows.
 - `AES_GCM_V1` vs. `AES_GCM_CTR_V1`.
@@ -417,9 +394,7 @@ feat: implement encrypted Parquet write pipeline
 feat: add Terraform for KMS keys, IAM roles, S3, ECR, Lambda
 feat: add Lambda container image for encrypt handler
 feat: add Glue Data Catalog table for PME metadata
-feat: add Lambda Federated Connector for PME decryption proxy
-feat: add Athena SQL view + QuickSight Direct Query integration
-feat: add RBAC demo with 3 roles on QuickSight dashboard
+feat: add Lambda Federated Connectors with RBAC + QuickSight integration
 test: add unit and integration tests for PME roundtrip
 ```
 
