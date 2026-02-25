@@ -1,0 +1,10 @@
+.env
+.env.*
+*.pem
+*.key
+venv/
+node_modules/
+__pycache__/
+.DS_Store
+AWS_RESOURCES.md
+.pytest_cache/
