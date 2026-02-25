@@ -80,7 +80,7 @@ To make this work "on the fly" for QuickSight, use a Lambda-based Federated Quer
 | Marketing Analyst | NULL | NULL | Visible | Visible | Visible | Visible |
 | Junior Analyst | NULL | NULL | NULL | NULL | Visible | Visible |
 
-RBAC is controlled by the Lambda connector's IAM execution role — different connectors (or a single connector with QuickSight row/column-level security) determine which KMS keys are accessible and therefore which columns are decrypted.
+RBAC is controlled by the caller's IAM role. The single Lambda connector receives the caller's identity via `FederatedIdentity`, assumes the caller's IAM role via STS, and uses that role's KMS grants to decrypt. Columns whose KMS key the caller cannot access are returned as NULL.
 
 ### PME Support by Compute Option
 
@@ -310,48 +310,56 @@ To make this work "on the fly" for QuickSight, use a Lambda-based Federated Quer
 ##### Data Flow Summary
 
 ```
-S3 (Encrypted)
-  → Lambda Connector (Decrypts in RAM)
-  → Athena View
-  → QuickSight
+User / QuickSight
+  → SELECT * FROM "pme_decrypted_view"
+  → Athena invokes single Lambda Connector
+  → Connector reads FederatedIdentity (caller's IAM ARN)
+  → sts:AssumeRole → caller's analyst role
+  → kms:Decrypt with assumed role → allowed columns decrypted, denied = NULL
+  → Results returned to Athena → caller
 ```
 
-##### RBAC Implementation — 3 Connectors, 3 Roles
+##### RBAC Implementation — Single Connector, Caller-Identity Based
 
-Deploy 3 Lambda Federated Connectors, each with a different IAM execution role. Same connector code, different KMS grants → different column visibility.
+Deploy **1 Lambda Federated Connector** and **1 Athena SQL view**. The connector inspects the caller's identity and assumes their IAM role to call KMS — the caller's KMS grants determine which columns are decrypted.
 
-| Connector | IAM Execution Role | Footer Key | PCI Key | PII Key | Column Visibility |
-|-----------|-------------------|:----------:|:-------:|:-------:|-------------------|
-| `pwe-hackathon-connector-fraud` | `pwe-hackathon-fraud-analyst` | Decrypt | Decrypt | Decrypt | All columns visible |
-| `pwe-hackathon-connector-marketing` | `pwe-hackathon-marketing-analyst` | Decrypt | DENY | Decrypt | PCI = NULL |
-| `pwe-hackathon-connector-junior` | `pwe-hackathon-junior-analyst` | Decrypt | DENY | DENY | PCI + PII = NULL |
+**How it works:**
 
-Each connector is registered as a separate Athena federated data source, with a corresponding Athena SQL view:
+1. User (or QuickSight) queries `SELECT * FROM "pme_decrypted_view"`.
+2. Athena invokes the single Lambda connector.
+3. The connector receives `FederatedIdentity` containing the caller's IAM principal ARN.
+4. The connector calls `sts:AssumeRole` on the caller's analyst role.
+5. Using the assumed role's credentials, the connector calls `kms:Decrypt` for each column key.
+6. Columns whose KMS key the assumed role cannot access → returned as NULL.
+
+**IAM Roles & KMS Grants (unchanged):**
+
+| IAM Role | Footer Key | PCI Key | PII Key | Column Visibility |
+|----------|:----------:|:-------:|:-------:|-------------------|
+| `pwe-hackathon-fraud-analyst` | Decrypt | Decrypt | Decrypt | All columns visible |
+| `pwe-hackathon-marketing-analyst` | Decrypt | DENY | Decrypt | PCI = NULL |
+| `pwe-hackathon-junior-analyst` | Decrypt | DENY | DENY | PCI + PII = NULL |
+
+**Single view — all roles query the same view:**
 
 ```sql
--- Fraud analyst view (all columns decrypted)
-CREATE VIEW "pme_fraud_view" AS
-SELECT * FROM "connector_fraud"."pme_db"."customer_data";
-
--- Marketing analyst view (PCI columns = NULL)
-CREATE VIEW "pme_marketing_view" AS
-SELECT * FROM "connector_marketing"."pme_db"."customer_data";
-
--- Junior analyst view (PCI + PII columns = NULL)
-CREATE VIEW "pme_junior_view" AS
-SELECT * FROM "connector_junior"."pme_db"."customer_data";
+CREATE VIEW "pme_decrypted_view" AS
+SELECT * FROM "pme_connector"."pme_db"."customer_data";
 ```
 
-QuickSight datasets point to the appropriate view based on the user's role. Same encrypted file on S3, same connector code, different IAM role → different columns visible on the dashboard.
+Same encrypted file on S3, same connector, same view — the caller's IAM role determines which columns are visible.
 
-**Terraform:** `federated.tf` for the 3 connector Lambdas + IAM execution roles. `quicksight.tf` for QuickSight data source and view resources.
+**Connector IAM policy:** The connector's own execution role needs `sts:AssumeRole` on the 3 analyst roles. Each analyst role's KMS key policy controls the actual decrypt access.
+
+**Terraform:** `federated.tf` for the single connector Lambda + IAM execution role + `sts:AssumeRole` trust. `quicksight.tf` for QuickSight data source and view.
 
 ##### QuickSight Configuration
 
-- Data source: Athena (pointed at the workgroup with the federated connectors).
+- Data source: Athena (pointed at the workgroup with the federated connector).
+- Dataset: Points to the single `pme_decrypted_view`.
 - Dataset mode: **Direct Query** (not SPICE) — decryption happens on-the-fly on every dashboard load.
-- Grant QuickSight service role (`aws-quicksight-service-role-v0`) `kms:Decrypt` on CMKs + S3 read access.
-- Compare output side-by-side on the QuickSight dashboard to demonstrate RBAC.
+- QuickSight user/group is mapped to the appropriate IAM analyst role — the connector assumes that role when the dashboard loads.
+- To demo RBAC: log in as different QuickSight users (each mapped to a different analyst role) and show the same dashboard returning different column visibility.
 - Document results for presentation.
 
 ### DAY 2: Benchmarks + Polish
@@ -377,10 +385,11 @@ QuickSight datasets point to the appropriate view based on the user's role. Same
 | Lambda encrypt works | `aws lambda invoke --function-name pwe-hackathon-pme-encrypt --payload '{}'` → 100 rows encrypted to S3 | DONE |
 | Glue table registered | Table visible in Glue Data Catalog pointing to S3 PME path | TODO |
 | Federated connector deployed | Lambda connector can read and decrypt PME files in memory | TODO |
-| Athena SQL view works | `SELECT * FROM "decrypted_pme_view"` returns decrypted rows | TODO |
+| Athena SQL view works | `SELECT * FROM "pme_decrypted_view"` returns decrypted rows | TODO |
+| RBAC — fraud analyst | Query view as fraud role → all columns visible | TODO |
+| RBAC — marketing analyst | Query view as marketing role → PCI = NULL | TODO |
+| RBAC — junior analyst | Query view as junior role → PCI + PII = NULL | TODO |
 | QuickSight Direct Query | Dashboard loads with decrypted data on-the-fly | TODO |
-| QuickSight RBAC — fraud | All columns visible on dashboard | TODO |
-| QuickSight RBAC — junior | PCI + PII columns = NULL on dashboard | TODO |
 | Integration tests | `pytest pme/tests/ -m integration` | DONE |
 
 ## Commit Strategy (Conventional Commits)
