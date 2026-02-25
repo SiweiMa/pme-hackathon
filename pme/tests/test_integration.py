@@ -25,6 +25,11 @@ from pme.src.config import (
     KmsKeyConfig,
     PmeConfig,
 )
+from pme.src.decryption import (
+    get_file_metadata,
+    read_encrypted_from_s3,
+    read_encrypted_parquet,
+)
 from pme.src.encryption import (
     PARQUET_MAGIC_PLAINTEXT,
     build_kms_connection_config,
@@ -247,3 +252,105 @@ class TestS3EncryptWithRealKms:
 
         assert recovered.num_rows == sample_csv_table.num_rows
         assert recovered.equals(sample_csv_table)
+
+
+# ---------------------------------------------------------------------------
+# Read pipeline integration tests (uses pme.src.decryption module)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestLocalDecryptWithRealKms:
+    """Read encrypted Parquet locally using real AWS KMS keys."""
+
+    @pytest.fixture
+    def encrypted_file(self, tmp_path, sample_csv_table, real_config, real_factory):
+        """Write a pre-encrypted file for read tests."""
+        out = tmp_path / "read_test.parquet"
+        write_encrypted_parquet(sample_csv_table, out, real_config, real_factory)
+        return out
+
+    def test_read_encrypted_parquet_roundtrip(
+        self, encrypted_file, sample_csv_table, real_config, real_factory
+    ):
+        """read_encrypted_parquet() recovers original data with real KMS."""
+        recovered = read_encrypted_parquet(
+            encrypted_file, real_config, real_factory
+        )
+        assert recovered.num_rows == sample_csv_table.num_rows
+        assert set(recovered.column_names) == set(sample_csv_table.column_names)
+        assert recovered.equals(sample_csv_table)
+
+    def test_read_with_column_selection(
+        self, encrypted_file, sample_csv_table, real_config, real_factory
+    ):
+        """columns= parameter filters the result columns."""
+        subset = ["xid", "balance"]
+        recovered = read_encrypted_parquet(
+            encrypted_file, real_config, real_factory, columns=subset
+        )
+        assert recovered.column_names == subset
+        assert recovered.num_rows == sample_csv_table.num_rows
+
+    def test_get_file_metadata_row_count(
+        self, encrypted_file, sample_csv_table, real_config, real_factory
+    ):
+        """get_file_metadata() returns correct row count."""
+        metadata = get_file_metadata(encrypted_file, real_config, real_factory)
+        assert metadata.num_rows == sample_csv_table.num_rows
+
+    def test_get_file_metadata_schema(
+        self, encrypted_file, sample_csv_table, real_config, real_factory
+    ):
+        """get_file_metadata() returns correct column names."""
+        metadata = get_file_metadata(encrypted_file, real_config, real_factory)
+        schema = metadata.schema.to_arrow_schema()
+        assert set(schema.names) == set(sample_csv_table.column_names)
+
+    def test_read_encrypted_footer(
+        self, tmp_path, sample_csv_table, real_factory
+    ):
+        """read_encrypted_parquet() works with encrypted footer."""
+        config = _build_real_config(plaintext_footer=False)
+        factory = _build_factory(config)
+        out = tmp_path / "enc_footer_read.parquet"
+        write_encrypted_parquet(sample_csv_table, out, config, factory)
+
+        recovered = read_encrypted_parquet(out, config, factory)
+        assert recovered.equals(sample_csv_table)
+
+
+@pytest.mark.integration
+class TestS3DecryptWithRealKms:
+    """Read encrypted Parquet from S3 using real AWS KMS keys."""
+
+    def test_s3_write_then_read(self, sample_csv_table, real_config, real_factory):
+        """write_encrypted_to_s3() → read_encrypted_from_s3() roundtrip."""
+        filename = "read_integration_test.parquet"
+        s3_uri = write_encrypted_to_s3(
+            sample_csv_table, real_config, real_factory, filename=filename
+        )
+        assert s3_uri.startswith("s3://")
+
+        recovered = read_encrypted_from_s3(
+            real_config, real_factory, filename=filename
+        )
+        assert recovered.num_rows == sample_csv_table.num_rows
+        assert set(recovered.column_names) == set(sample_csv_table.column_names)
+        assert recovered.equals(sample_csv_table)
+
+    def test_s3_read_with_column_selection(
+        self, sample_csv_table, real_config, real_factory
+    ):
+        """read_encrypted_from_s3() with columns= filters result."""
+        filename = "read_cols_integration_test.parquet"
+        write_encrypted_to_s3(
+            sample_csv_table, real_config, real_factory, filename=filename
+        )
+
+        subset = ["first_name", "email", "xid"]
+        recovered = read_encrypted_from_s3(
+            real_config, real_factory, filename=filename, columns=subset
+        )
+        assert recovered.column_names == subset
+        assert recovered.num_rows == sample_csv_table.num_rows
