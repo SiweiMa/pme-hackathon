@@ -82,6 +82,54 @@ class InMemoryKmsClientFactory:
 
 
 # ---------------------------------------------------------------------------
+# RestrictedInMemoryKmsClient — simulates KMS AccessDeniedException for RBAC
+# ---------------------------------------------------------------------------
+
+
+class RestrictedInMemoryKmsClient(InMemoryKmsClient):
+    """InMemoryKmsClient that denies unwrap_key for specified key aliases.
+
+    Simulates the behaviour of an IAM role that lacks kms:Decrypt
+    permission on certain CMKs.  wrap_key always succeeds (write path
+    is not restricted in the RBAC model).
+    """
+
+    def __init__(
+        self,
+        kms_connection_config=None,
+        denied_key_ids: set[str] | None = None,
+    ) -> None:
+        super().__init__(kms_connection_config)
+        self._denied_key_ids: set[str] = denied_key_ids or set()
+
+    def unwrap_key(self, wrapped_key: str, master_key_identifier: str) -> bytes:
+        if master_key_identifier in self._denied_key_ids:
+            raise PermissionError(
+                f"Access denied: kms:Decrypt not allowed for key "
+                f"'{master_key_identifier}'"
+            )
+        return super().unwrap_key(wrapped_key, master_key_identifier)
+
+
+class RestrictedInMemoryKmsClientFactory:
+    """Factory that creates RestrictedInMemoryKmsClient instances.
+
+    Parameters
+    ----------
+    denied_key_ids : set[str]
+        Key aliases for which unwrap_key will raise PermissionError.
+    """
+
+    def __init__(self, denied_key_ids: set[str] | None = None) -> None:
+        self._denied_key_ids = denied_key_ids or set()
+
+    def __call__(self, kms_connection_config) -> RestrictedInMemoryKmsClient:
+        return RestrictedInMemoryKmsClient(
+            kms_connection_config, denied_key_ids=self._denied_key_ids
+        )
+
+
+# ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
@@ -162,3 +210,15 @@ def kms_conn_config() -> pe.KmsConnectionConfig:
     kms_conn = pe.KmsConnectionConfig()
     kms_conn.custom_kms_conf = {"region": "us-east-1"}
     return kms_conn
+
+
+@pytest.fixture
+def encrypted_parquet_path(
+    tmp_path, sample_table, pme_config, in_memory_kms_factory
+):
+    """Write a pre-encrypted Parquet file and return its path."""
+    from pme.src.encryption import write_encrypted_parquet
+
+    out = tmp_path / "encrypted.parquet"
+    write_encrypted_parquet(sample_table, out, pme_config, in_memory_kms_factory)
+    return out
