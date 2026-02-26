@@ -74,6 +74,89 @@ resource "aws_iam_role_policy" "fraud_analyst_s3" {
 }
 
 # =============================================================================
+# Shared policy: Athena federated query permissions for all analyst roles
+# =============================================================================
+
+locals {
+  athena_federated_query_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AthenaFullConsoleAccess"
+        Effect = "Allow"
+        Action = [
+          "athena:StartQueryExecution",
+          "athena:GetQueryExecution",
+          "athena:GetQueryResults",
+          "athena:StopQueryExecution",
+          "athena:GetWorkGroup",
+          "athena:ListWorkGroups",
+          "athena:GetDataCatalog",
+          "athena:ListDataCatalogs",
+          "athena:ListDatabases",
+          "athena:ListTableMetadata",
+          "athena:GetTableMetadata",
+          "athena:BatchGetQueryExecution",
+          "athena:ListQueryExecutions",
+          "athena:ListNamedQueries",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "GlueCatalogRead"
+        Effect = "Allow"
+        Action = [
+          "glue:GetDatabase",
+          "glue:GetDatabases",
+          "glue:GetTable",
+          "glue:GetTables",
+          "glue:GetPartitions",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "LambdaInvokeConnector"
+        Effect = "Allow"
+        Action = "lambda:InvokeFunction"
+        Resource = "arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:function:pwe-hackathon-pme-connector"
+      },
+      {
+        Sid    = "S3SpillBucketAccess"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:ListBucket",
+          "s3:GetBucketLocation",
+        ]
+        Resource = [
+          "arn:aws:s3:::pwe-hackathon-athena-spill-${var.aws_account_id}",
+          "arn:aws:s3:::pwe-hackathon-athena-spill-${var.aws_account_id}/*",
+        ]
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "fraud_analyst_athena" {
+  name   = "athena-federated-query"
+  role   = aws_iam_role.fraud_analyst.id
+  policy = local.athena_federated_query_policy
+}
+
+resource "aws_iam_role_policy" "marketing_analyst_athena" {
+  name   = "athena-federated-query"
+  role   = aws_iam_role.marketing_analyst.id
+  policy = local.athena_federated_query_policy
+}
+
+resource "aws_iam_role_policy" "junior_analyst_athena" {
+  name   = "athena-federated-query"
+  role   = aws_iam_role.junior_analyst.id
+  policy = local.athena_federated_query_policy
+}
+
+# =============================================================================
 # marketing-analyst: decrypt footer + PII only + S3 read
 # =============================================================================
 
@@ -342,6 +425,43 @@ resource "aws_iam_role_policy" "athena_spark_cloudwatch" {
           "logs:PutLogEvents",
         ]
         Resource = "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:*"
+      }
+    ]
+  })
+}
+
+# =============================================================================
+# Console user for role switching (root cannot assume roles in Console)
+# =============================================================================
+
+resource "aws_iam_user" "console_user" {
+  name = "pwe-hackathon-console-user"
+}
+
+resource "aws_iam_user_login_profile" "console_user" {
+  user                    = aws_iam_user.console_user.name
+  password_length         = 16
+  password_reset_required = false
+
+  lifecycle {
+    ignore_changes = [password_length, password_reset_required]
+  }
+}
+
+resource "aws_iam_user_policy" "console_user_assume_roles" {
+  name = "assume-analyst-roles"
+  user = aws_iam_user.console_user.name
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = "sts:AssumeRole"
+        Resource = [
+          aws_iam_role.fraud_analyst.arn,
+          aws_iam_role.marketing_analyst.arn,
+          aws_iam_role.junior_analyst.arn,
+        ]
       }
     ]
   })

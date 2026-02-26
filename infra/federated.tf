@@ -259,3 +259,15 @@ resource "aws_athena_data_catalog" "pme_connector" {
     "function" = aws_lambda_function.pme_connector.arn
   }
 }
+
+# --- Athena SQL workgroup for federated queries ------------------------------
+
+resource "aws_athena_workgroup" "federated" {
+  name = "pwe-hackathon-pme-federated"
+
+  configuration {
+    result_configuration {
+      output_location = "s3://${aws_s3_bucket.athena_spill.id}/query-results/"
+    }
+  }
+}
