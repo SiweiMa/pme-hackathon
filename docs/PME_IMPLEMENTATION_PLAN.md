@@ -116,24 +116,36 @@ RBAC is controlled by the caller's IAM role. The single Lambda connector receive
 │   ├── handler.py                # Lambda: reads CSV from S3, encrypts, writes PME Parquet
 │   ├── deploy.sh                 # Build, push to ECR, update Lambda function
 │   └── requirements.txt          # Lambda-only deps (pyarrow, s3fs — boto3 pre-installed)
+├── connector/                    # Athena Federated Connector (decrypt proxy)
+│   ├── Dockerfile
+│   ├── handler.py                # Federation protocol + RBAC decrypt
+│   ├── deploy.sh
+│   └── requirements.txt
 ├── infra/
 │   ├── main.tf                   # Provider + S3 backend
 │   ├── variables.tf              # Input variables
 │   ├── kms.tf                    # 3 KMS CMKs (footer, PCI, PII)
-│   ├── iam.tf                    # RBAC roles + Lambda/connector execution roles
+│   ├── iam.tf                    # RBAC roles + Lambda/connector execution roles + Iceberg S3 read
 │   ├── s3.tf                     # S3 bucket for encrypted data
 │   ├── lambda.tf                 # ECR + Lambda encrypt function + IAM execution role
-│   ├── federated.tf              # Athena Federated Connector Lambda (decryption proxy)
+│   ├── federated.tf              # Athena Federated Connector Lambda + workgroup
 │   ├── glue.tf                   # Glue Data Catalog table (PME metadata)
-│   ├── quicksight.tf             # QuickSight data source + Athena SQL view
+│   ├── iceberg.tf                # Iceberg S3 bucket, IAM role, Glue database
 │   └── outputs.tf
+├── snowflake/
+│   ├── iceberg_setup.sql         # Snowflake DDL: storage integration, external volume, Iceberg table
+│   └── register_iceberg_glue.sh  # Register Iceberg metadata in Glue
 ├── data/
 │   ├── Hackathon_customer_data.csv   # Synthetic sample data (100 rows)
-│   └── Hackathon_customer_data_2.csv
+│   ├── Hackathon_customer_data_2.csv
+│   └── Hackathon_auth_data.csv       # Auth transactions (532 rows)
 ├── docs/
 │   ├── PME_IMPLEMENTATION_PLAN.md
 │   ├── ATHENA_DECRYPTION_GUIDE.md
-│   └── SPARK_PME_CHALLENGE.md
+│   ├── SNOWFLAKE_ICEBERG_SETUP.md
+│   ├── SPARK_PME_CHALLENGE.md
+│   ├── PME_PIPELINE_REPORT.md
+│   └── PME_FAQ.md
 └── README.md
 ```
 
@@ -147,9 +159,10 @@ RBAC is controlled by the caller's IAM role. The single Lambda connector receive
 | Phase 4 | Sample data | DONE |
 | Phase 5 | AWS infrastructure (Terraform) | DONE |
 | Phase 6 | Lambda container image — encrypt | DONE |
-| Phase 7 | Glue Data Catalog — register PME table metadata | TODO |
-| Phase 8 | QuickSight read path — Federated Connector + RBAC | TODO |
-| Phase 9 | Benchmarks + polish | TODO |
+| Phase 7 | Glue Data Catalog — register PME table metadata | DONE |
+| Phase 8 | Athena Federated Connector — decrypt + RBAC | DONE |
+| Phase 9 | Snowflake Iceberg + cross-catalog join | DONE |
+| Phase 10 | Benchmarks + polish | TODO |
 
 ## Implementation Phases
 
@@ -232,11 +245,12 @@ All infrastructure is deployed in `us-east-2` (account `651767347247`):
 - 1 Lambda Function (container image): `pme-hackathon-pme-encrypt` (1536 MB, 300s timeout).
 - 1 CloudWatch log group: `/aws/lambda/pme-hackathon-pme-encrypt` (7-day retention).
 
-**Remaining infra (for read path) to be added:**
-  - Lambda Federated Connector (decryption proxy for Athena SQL).
-  - Glue Data Catalog table (PME metadata registration).
-  - QuickSight data source + Athena SQL view.
-  - IAM roles for the federated connector with tier-specific `kms:Decrypt` grants.
+**Additional infra added for read path + Iceberg:**
+  - Lambda Federated Connector (decryption proxy for Athena SQL) — `infra/federated.tf`.
+  - Glue Data Catalog table (PME metadata registration) — `infra/glue.tf`.
+  - Athena workgroup for federated queries — `infra/federated.tf`.
+  - Iceberg S3 bucket, IAM role, Glue database — `infra/iceberg.tf`.
+  - Iceberg S3 read policies for analyst roles — `infra/iam.tf`.
 
 #### Phase 6: Lambda Container Image — Encrypt — DONE
 
@@ -266,14 +280,15 @@ $ aws lambda invoke --function-name pme-hackathon-pme-encrypt --payload '{}' /de
 {"statusCode": 200, "body": {"output_s3_uri": "s3://pwe-hackathon-pme-data-651767347247/pme-data/customer_data_encrypted.parquet", "rows_encrypted": 100, "columns_encrypted": ["ssn", "first_name", "last_name", "email"]}}
 ```
 
-#### Phase 7: Glue Data Catalog — Register PME Table Metadata
+#### Phase 7: Glue Data Catalog — Register PME Table Metadata — DONE
 
-- Create a Glue database and table definition pointing to the PME-encrypted S3 path.
+- Glue database `pme-hackathon-pme-db` and table `customer_data` created via Terraform (`infra/glue.tf`).
+- Table points to the PME-encrypted Parquet at `s3://pwe-hackathon-pme-data-651767347247/pme-data/`.
 - Table metadata only — no decrypted files stored. Encrypted Parquet stays in S3 untouched.
-- Schema matches the CSV columns: `first_name`, `last_name`, `ssn`, `email`, `xid`, `balance`.
-- Terraform resource in `glue.tf`.
+- Schema: `first_name`, `last_name`, `ssn`, `email`, `xid`, `balance`.
+- Table type: `EXTERNAL_TABLE`, format: `org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat`.
 
-#### Phase 8: Lambda Federated Connector — Decryption Proxy
+#### Phase 8: Lambda Federated Connector — Decryption Proxy — DONE
 
 **Important nuance:** Athena SQL (Trino) does not natively support PME decryption — it cannot pass PME column-keys or footer-keys into its internal Parquet reader. Therefore, for QuickSight to "Direct Query" PME data on the fly, you must use a Lambda Federated Connector as a decryption proxy that presents the data to Athena SQL in a way it can understand.
 
@@ -368,9 +383,54 @@ Same encrypted file on S3, same connector, same view — the caller's IAM role d
 - To demo RBAC: log in as different QuickSight users (each mapped to a different analyst role) and show the same dashboard returning different column visibility.
 - Document results for presentation.
 
+#### Phase 9: Snowflake Iceberg + Cross-Catalog Join — DONE
+
+Loaded auth transaction data into a Snowflake-managed Iceberg table on S3, registered it in Glue, and joined with PME-encrypted customer data via Athena cross-catalog queries.
+
+**AWS resources created (Terraform `infra/iceberg.tf`):**
+
+| Resource | Name |
+|----------|------|
+| S3 bucket | `pme-hackathon-iceberg-651767347247` |
+| IAM role | `pme-hackathon-snowflake-iceberg` |
+| Glue database | `pme-hackathon-iceberg-db` |
+
+**Snowflake objects created (`snowflake/iceberg_setup.sql`):**
+
+| Object | Name |
+|--------|------|
+| Database | `PME_HACKATHON` |
+| Warehouse | `PME_HACKATHON_WH` |
+| Storage Integration | `pme_hackathon_iceberg_s3` |
+| External Volume | `pme_hackathon_iceberg_vol` |
+| Iceberg Table | `PME_HACKATHON.PUBLIC.AUTH_DATA` |
+| Stage | `pme_hackathon_auth_stage` |
+
+**Data flow:**
+
+```
+CSV (532 rows) → S3 raw/ → Snowflake COPY INTO → Iceberg (Parquet + metadata) on S3
+  → Glue Catalog (pme-hackathon-iceberg-db.auth_data)
+  → Athena (AwsDataCatalog) reads Iceberg natively
+  → JOIN with PME customer_data via Lambda federated connector
+```
+
+**Cross-catalog join query:**
+
+```sql
+SELECT c.first_name, c.last_name, c.email, c.xid, c.balance,
+       a.auth_id, a.auth_ts, a.merchant, a.amount
+FROM "pme-hackathon-pme-connector"."pme-hackathon-pme-db"."customer_data" c
+JOIN "AwsDataCatalog"."pme-hackathon-iceberg-db"."auth_data" a
+  ON c.xid = a.xid
+ORDER BY a.auth_ts DESC;
+```
+
+**Key gotcha:** Snowflake's storage integration and external volume generate **different** `STORAGE_AWS_EXTERNAL_ID` values. The IAM trust policy must include both. See `docs/SNOWFLAKE_ICEBERG_SETUP.md` for full details.
+
 ### DAY 2: Benchmarks + Polish
 
-#### Phase 9: Benchmarks + Polish
+#### Phase 10: Benchmarks + Polish
 
 - Encrypted vs. unencrypted write/read at 10K/100K/1M rows.
 - `AES_GCM_V1` vs. `AES_GCM_CTR_V1`.
@@ -389,12 +449,16 @@ Same encrypted file on S3, same connector, same view — the caller's IAM role d
 | Roundtrip integrity | encrypt → decrypt → `assert table.equals(original)` | DONE |
 | RBAC works locally | Assume each role → verify column visibility | DONE |
 | Lambda encrypt works | `aws lambda invoke --function-name pme-hackathon-pme-encrypt --payload '{}'` → 100 rows encrypted to S3 | DONE |
-| Glue table registered | Table visible in Glue Data Catalog pointing to S3 PME path | TODO |
-| Federated connector deployed | Lambda connector can read and decrypt PME files in memory | TODO |
-| Athena SQL view works | `SELECT * FROM "pme_decrypted_view"` returns decrypted rows | TODO |
-| RBAC — fraud analyst | Query view as fraud role → all columns visible | TODO |
-| RBAC — marketing analyst | Query view as marketing role → PCI = NULL | TODO |
-| RBAC — junior analyst | Query view as junior role → PCI + PII = NULL | TODO |
+| Glue table registered | Table visible in Glue Data Catalog pointing to S3 PME path | DONE |
+| Federated connector deployed | Lambda connector can read and decrypt PME files in memory | DONE |
+| Athena federated query works | `SELECT * FROM "pme-hackathon-pme-connector"."pme-hackathon-pme-db"."customer_data"` returns decrypted rows | DONE |
+| RBAC — fraud analyst | Query as fraud role → all columns visible | DONE |
+| RBAC — marketing analyst | Query as marketing role → PCI (ssn) = NULL | DONE |
+| RBAC — junior analyst | Query as junior role → PCI + PII = NULL | DONE |
+| Iceberg table on S3 | Snowflake Iceberg table writes Parquet + metadata to S3 | DONE |
+| Iceberg in Glue | `pme-hackathon-iceberg-db.auth_data` registered in Glue | DONE |
+| Athena Iceberg query | `SELECT * FROM "AwsDataCatalog"."pme-hackathon-iceberg-db"."auth_data"` returns rows | DONE |
+| Cross-catalog join | PME customer_data JOIN Iceberg auth_data via Athena | DONE |
 | QuickSight Direct Query | Dashboard loads with decrypted data on-the-fly | TODO |
 | Integration tests | `pytest pme/tests/ -m integration` | DONE |
 
