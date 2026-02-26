@@ -113,8 +113,29 @@ def _build_config() -> PmeConfig:
 
 
 # ---------------------------------------------------------------------------
-# S3 download helper
+# S3 helpers
 # ---------------------------------------------------------------------------
+
+
+def _list_customer_data_files() -> list[str]:
+    """List all parquet files under S3_PREFIX containing 'customer_data'.
+
+    Returns a list of S3 keys (e.g. ["pme-data/customer_data_encrypted.parquet"]).
+    """
+    s3 = boto3.client("s3")
+    prefix = f"{S3_PREFIX}/" if S3_PREFIX else ""
+    paginator = s3.get_paginator("list_objects_v2")
+    keys: list[str] = []
+    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if key.endswith(".parquet") and "customer_data" in key:
+                keys.append(key)
+    logger.info(
+        "Found %d customer_data parquet file(s) under s3://%s/%s",
+        len(keys), S3_BUCKET, prefix,
+    )
+    return keys
 
 
 def _download_pme_file(s3_key: str) -> Path:
@@ -169,22 +190,28 @@ def _handle_get_table_layout(event: dict) -> dict:
 
 def _handle_get_splits(event: dict) -> dict:
     catalog = event.get("catalogName", CATALOG_NAME)
-    split = {
-        "spillLocation": {
-            "@type": "S3SpillLocation",
-            "bucket": SPILL_BUCKET,
-            "key": SPILL_PREFIX,
-            "directory": True,
-        },
-        "encryptionKey": {
-            "key": "",
-            "nonce": "",
-        },
-        "properties": {
-            "s3_key": f"{S3_PREFIX}/customer_data_encrypted.parquet",
-        },
-    }
-    return get_splits_response(catalog, [split])
+    s3_keys = _list_customer_data_files()
+    if not s3_keys:
+        logger.warning("No customer_data parquet files found under s3://%s/%s", S3_BUCKET, S3_PREFIX)
+    splits = [
+        {
+            "spillLocation": {
+                "@type": "S3SpillLocation",
+                "bucket": SPILL_BUCKET,
+                "key": SPILL_PREFIX,
+                "directory": True,
+            },
+            "encryptionKey": {
+                "key": "",
+                "nonce": "",
+            },
+            "properties": {
+                "s3_key": key,
+            },
+        }
+        for key in s3_keys
+    ]
+    return get_splits_response(catalog, splits)
 
 
 def _handle_read_records(event: dict) -> dict:
@@ -203,9 +230,9 @@ def _handle_read_records(event: dict) -> dict:
     # 2. Determine which file to read from the split properties
     split = event.get("split", {})
     properties = split.get("properties", {})
-    s3_key = properties.get(
-        "s3_key", f"{S3_PREFIX}/customer_data_encrypted.parquet",
-    )
+    s3_key = properties.get("s3_key", "")
+    if not s3_key:
+        raise ValueError("Split is missing 's3_key' property")
 
     # 3. Download PME file from S3 to /tmp
     local_path = _download_pme_file(s3_key)
