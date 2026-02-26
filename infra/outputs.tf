@@ -128,3 +128,19 @@ output "sf_snowflake_role_arn" {
   description = "IAM role ARN for Snowflake to assume (use in CREATE API INTEGRATION)"
   value       = aws_iam_role.snowflake_apigw.arn
 }
+
+# Iceberg / Snowflake Storage Integration
+output "iceberg_bucket_name" {
+  description = "S3 bucket for Snowflake-managed Iceberg tables"
+  value       = aws_s3_bucket.iceberg.id
+}
+
+output "iceberg_bucket_arn" {
+  description = "ARN of the Iceberg S3 bucket"
+  value       = aws_s3_bucket.iceberg.arn
+}
+
+output "sf_iceberg_role_arn" {
+  description = "IAM role ARN for Snowflake storage integration (Iceberg)"
+  value       = aws_iam_role.snowflake_iceberg.arn
+}

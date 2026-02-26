@@ -497,3 +497,46 @@ resource "aws_iam_user_policy" "console_user_assume_roles" {
     ]
   })
 }
+
+# =============================================================================
+# Iceberg S3 read access for analyst roles (Athena cross-catalog join)
+# =============================================================================
+
+locals {
+  iceberg_s3_read_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "S3ReadIcebergBucket"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:ListBucket",
+          "s3:GetBucketLocation",
+        ]
+        Resource = [
+          aws_s3_bucket.iceberg.arn,
+          "${aws_s3_bucket.iceberg.arn}/*",
+        ]
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "fraud_analyst_iceberg_s3" {
+  name   = "s3-read-iceberg"
+  role   = aws_iam_role.fraud_analyst.id
+  policy = local.iceberg_s3_read_policy
+}
+
+resource "aws_iam_role_policy" "marketing_analyst_iceberg_s3" {
+  name   = "s3-read-iceberg"
+  role   = aws_iam_role.marketing_analyst.id
+  policy = local.iceberg_s3_read_policy
+}
+
+resource "aws_iam_role_policy" "junior_analyst_iceberg_s3" {
+  name   = "s3-read-iceberg"
+  role   = aws_iam_role.junior_analyst.id
+  policy = local.iceberg_s3_read_policy
+}
