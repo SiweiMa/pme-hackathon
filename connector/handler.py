@@ -264,7 +264,10 @@ def lambda_handler(event, context):
     to the appropriate handler function.
     """
     request_type = event.get("@type", "")
-    logger.info("Federation request: %s", request_type)
+    logger.info("Federation request: %s | event keys: %s", request_type, list(event.keys()))
+    # Log full event for debugging (excluding large binary fields)
+    debug_event = {k: v for k, v in event.items() if k not in ("schema",)}
+    logger.info("Request payload: %s", json.dumps(debug_event, default=str)[:2000])
 
     handler = _HANDLERS.get(request_type)
     if handler is None:
@@ -275,5 +278,12 @@ def lambda_handler(event, context):
         }
 
     response = handler(event)
-    logger.info("Federation response type: %s", response.get("@type", "unknown"))
+    # Log response (truncate large base64 fields)
+    debug_resp = {}
+    for k, v in response.items():
+        if isinstance(v, str) and len(v) > 200:
+            debug_resp[k] = v[:100] + "...<truncated>"
+        else:
+            debug_resp[k] = v
+    logger.info("Response: %s", json.dumps(debug_resp, default=str)[:2000])
     return response
