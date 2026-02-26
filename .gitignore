@@ -31,3 +31,6 @@ infra/*_override.tf.json
 # Project
 AWS_RESOURCES.md
 pme/output/
+
+# Worktrees
+pwe-hackathon-wt/

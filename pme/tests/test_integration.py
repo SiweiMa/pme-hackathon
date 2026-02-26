@@ -53,7 +53,7 @@ PII_KEY_ARN = f"arn:aws:kms:{AWS_REGION}:{ACCOUNT_ID}:alias/pwe-hackathon-pii-ke
 S3_BUCKET = f"pwe-hackathon-pme-data-{ACCOUNT_ID}"
 S3_PREFIX = "pme-data"
 
-CSV_PATH = Path(__file__).resolve().parents[2] / "Hackathon_customer_data.csv"
+CSV_PATH = Path(__file__).resolve().parents[2] / "data" / "Hackathon_customer_data.csv"
 
 
 # ---------------------------------------------------------------------------
