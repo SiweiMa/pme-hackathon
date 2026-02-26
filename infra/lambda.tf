@@ -11,7 +11,7 @@
 # --- ECR repository -----------------------------------------------------------
 
 resource "aws_ecr_repository" "pme_lambda" {
-  name                 = "pwe-hackathon-pme-lambda"
+  name                 = "pme-hackathon-pme-lambda"
   image_tag_mutability = "MUTABLE"
   force_delete         = true
 }
@@ -39,14 +39,14 @@ resource "aws_ecr_lifecycle_policy" "pme_lambda" {
 # --- CloudWatch log group -----------------------------------------------------
 
 resource "aws_cloudwatch_log_group" "pme_lambda" {
-  name              = "/aws/lambda/pwe-hackathon-pme-encrypt"
+  name              = "/aws/lambda/pme-hackathon-pme-encrypt"
   retention_in_days = 7
 }
 
 # --- IAM execution role -------------------------------------------------------
 
 resource "aws_iam_role" "lambda_pme_encrypt" {
-  name = "pwe-hackathon-lambda-pme-encrypt"
+  name = "pme-hackathon-lambda-pme-encrypt"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -130,7 +130,7 @@ resource "aws_iam_role_policy" "lambda_pme_logs" {
 # --- Lambda function ----------------------------------------------------------
 
 resource "aws_lambda_function" "pme_encrypt" {
-  function_name = "pwe-hackathon-pme-encrypt"
+  function_name = "pme-hackathon-pme-encrypt"
   role          = aws_iam_role.lambda_pme_encrypt.arn
   package_type  = "Image"
   image_uri     = "${aws_ecr_repository.pme_lambda.repository_url}:latest"

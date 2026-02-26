@@ -57,8 +57,8 @@ SPILL_PREFIX = os.environ.get("SPILL_PREFIX", "athena-spill")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-2")
 
 # Schema and table identifiers
-CATALOG_NAME = "pwe-hackathon-pme-connector"
-SCHEMA_NAME = "pwe-hackathon-pme-db"
+CATALOG_NAME = "pme-hackathon-pme-connector"
+SCHEMA_NAME = "pme-hackathon-pme-db"
 TABLE_NAME = "customer_data"
 SOURCE_TYPE = "pme_connector"
 
@@ -85,14 +85,14 @@ def _build_config() -> PmeConfig:
     return PmeConfig(
         footer_key=KmsKeyConfig(
             key_arn=FOOTER_KEY_ARN,
-            alias="pwe-hackathon-footer-key",
+            alias="pme-hackathon-footer-key",
         ),
         column_groups=[
             ColumnGroupConfig(
                 name="pci",
                 kms_key=KmsKeyConfig(
                     key_arn=PCI_KEY_ARN,
-                    alias="pwe-hackathon-pci-key",
+                    alias="pme-hackathon-pci-key",
                 ),
                 columns=["ssn"],
             ),
@@ -100,7 +100,7 @@ def _build_config() -> PmeConfig:
                 name="pii",
                 kms_key=KmsKeyConfig(
                     key_arn=PII_KEY_ARN,
-                    alias="pwe-hackathon-pii-key",
+                    alias="pme-hackathon-pii-key",
                 ),
                 columns=["first_name", "last_name", "email"],
             ),

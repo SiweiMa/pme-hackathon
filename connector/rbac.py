@@ -16,8 +16,8 @@ import re
 logger = logging.getLogger(__name__)
 
 # KMS key aliases used in PmeConfig column groups
-PCI_KEY_ALIAS = "pwe-hackathon-pci-key"
-PII_KEY_ALIAS = "pwe-hackathon-pii-key"
+PCI_KEY_ALIAS = "pme-hackathon-pci-key"
+PII_KEY_ALIAS = "pme-hackathon-pii-key"
 
 # Static mapping: role/user name substring → set of denied key aliases
 # Ordered from most-permissive to most-restrictive.
@@ -27,9 +27,9 @@ _ROLE_DENIED_KEYS: list[tuple[str, frozenset[str]]] = [
     ("hackathon-service", frozenset()),
     ("AdministratorAccess", frozenset()),
     # Analyst roles
-    ("pwe-hackathon-fraud-analyst", frozenset()),
-    ("pwe-hackathon-marketing-analyst", frozenset({PCI_KEY_ALIAS})),
-    ("pwe-hackathon-junior-analyst", frozenset({PCI_KEY_ALIAS, PII_KEY_ALIAS})),
+    ("pme-hackathon-fraud-analyst", frozenset()),
+    ("pme-hackathon-marketing-analyst", frozenset({PCI_KEY_ALIAS})),
+    ("pme-hackathon-junior-analyst", frozenset({PCI_KEY_ALIAS, PII_KEY_ALIAS})),
 ]
 
 # Default for unknown callers: maximum restriction
@@ -57,10 +57,10 @@ def denied_keys_for_caller(caller_arn: str) -> frozenset[str]:
 
     Examples
     --------
-    >>> denied_keys_for_caller("arn:aws:iam::123456:role/pwe-hackathon-fraud-analyst")
+    >>> denied_keys_for_caller("arn:aws:iam::123456:role/pme-hackathon-fraud-analyst")
     frozenset()
-    >>> denied_keys_for_caller("arn:aws:iam::123456:role/pwe-hackathon-junior-analyst")
-    frozenset({'pwe-hackathon-pci-key', 'pwe-hackathon-pii-key'})
+    >>> denied_keys_for_caller("arn:aws:iam::123456:role/pme-hackathon-junior-analyst")
+    frozenset({'pme-hackathon-pci-key', 'pme-hackathon-pii-key'})
     """
     if not caller_arn:
         logger.warning("Empty caller ARN — applying maximum restriction")

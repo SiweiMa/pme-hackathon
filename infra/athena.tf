@@ -6,7 +6,8 @@
 # -----------------------------------------------------------------------------
 
 resource "aws_athena_workgroup" "fraud" {
-  name = "pwe-hackathon-pme-fraud"
+  name          = "pme-hackathon-pme-fraud"
+  force_destroy = true
 
   configuration {
     execution_role = aws_iam_role.athena_spark_execution.arn
@@ -22,7 +23,8 @@ resource "aws_athena_workgroup" "fraud" {
 }
 
 resource "aws_athena_workgroup" "marketing" {
-  name = "pwe-hackathon-pme-marketing"
+  name          = "pme-hackathon-pme-marketing"
+  force_destroy = true
 
   configuration {
     execution_role = aws_iam_role.athena_spark_execution.arn
@@ -38,7 +40,8 @@ resource "aws_athena_workgroup" "marketing" {
 }
 
 resource "aws_athena_workgroup" "junior" {
-  name = "pwe-hackathon-pme-junior"
+  name          = "pme-hackathon-pme-junior"
+  force_destroy = true
 
   configuration {
     execution_role = aws_iam_role.athena_spark_execution.arn

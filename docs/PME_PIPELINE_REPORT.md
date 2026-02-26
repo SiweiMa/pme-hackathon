@@ -35,9 +35,9 @@ first_name last_name         ssn                    email      xid  balance
 Each column is assigned a sensitivity tier, and each tier maps to a separate KMS CMK:
 
 ```
-Footer key: pwe-hackathon-footer-key
-PCI key:    pwe-hackathon-pci-key  →  columns: ['ssn']
-PII key:    pwe-hackathon-pii-key  →  columns: ['first_name', 'last_name', 'email']
+Footer key: pme-hackathon-footer-key
+PCI key:    pme-hackathon-pci-key  →  columns: ['ssn']
+PII key:    pme-hackathon-pii-key  →  columns: ['first_name', 'last_name', 'email']
 Non-encrypted columns: ['xid', 'balance']
 Algorithm: AES_GCM_V1
 Plaintext footer: True
@@ -45,10 +45,10 @@ Plaintext footer: True
 
 | Column | Tier | KMS Key (alias) | Encrypted? |
 |--------|------|------------------|------------|
-| `ssn` | PCI | `pwe-hackathon-pci-key` | Yes |
-| `first_name` | PII | `pwe-hackathon-pii-key` | Yes |
-| `last_name` | PII | `pwe-hackathon-pii-key` | Yes |
-| `email` | PII | `pwe-hackathon-pii-key` | Yes |
+| `ssn` | PCI | `pme-hackathon-pci-key` | Yes |
+| `first_name` | PII | `pme-hackathon-pii-key` | Yes |
+| `last_name` | PII | `pme-hackathon-pii-key` | Yes |
+| `email` | PII | `pme-hackathon-pii-key` | Yes |
 | `xid` | Non-sensitive | — | No |
 | `balance` | Non-sensitive | — | No |
 
@@ -75,9 +75,9 @@ Writing encrypted Parquet (real KMS)...
    - `DEK_footer` for the Parquet footer
 
 2. Each DEK is wrapped (encrypted) by KMS via `wrap_key(DEK, alias)`:
-   - `wrap_key(DEK_pci, "pwe-hackathon-pci-key")` → KMS returns encrypted blob
-   - `wrap_key(DEK_pii, "pwe-hackathon-pii-key")` → KMS returns encrypted blob
-   - `wrap_key(DEK_footer, "pwe-hackathon-footer-key")` → KMS returns encrypted blob
+   - `wrap_key(DEK_pci, "pme-hackathon-pci-key")` → KMS returns encrypted blob
+   - `wrap_key(DEK_pii, "pme-hackathon-pii-key")` → KMS returns encrypted blob
+   - `wrap_key(DEK_footer, "pme-hackathon-footer-key")` → KMS returns encrypted blob
 
 3. Column data is encrypted locally with the plaintext DEKs (AES-GCM):
    - `ssn` bytes + `DEK_pci` → encrypted bytes
@@ -155,9 +155,9 @@ The decrypted data is **identical** to the original CSV input.
 
 1. PyArrow reads wrapped DEKs from the Parquet footer
 2. Each wrapped DEK is sent to KMS via `unwrap_key(wrapped_DEK, alias)`:
-   - `unwrap_key(wrapped_DEK_pci, "pwe-hackathon-pci-key")` → returns plaintext `DEK_pci`
-   - `unwrap_key(wrapped_DEK_pii, "pwe-hackathon-pii-key")` → returns plaintext `DEK_pii`
-   - `unwrap_key(wrapped_DEK_footer, "pwe-hackathon-footer-key")` → returns plaintext `DEK_footer`
+   - `unwrap_key(wrapped_DEK_pci, "pme-hackathon-pci-key")` → returns plaintext `DEK_pci`
+   - `unwrap_key(wrapped_DEK_pii, "pme-hackathon-pii-key")` → returns plaintext `DEK_pii`
+   - `unwrap_key(wrapped_DEK_footer, "pme-hackathon-footer-key")` → returns plaintext `DEK_footer`
 3. Column data is decrypted locally with the plaintext DEKs (AES-GCM)
 4. Full PyArrow Table is returned
 
@@ -205,7 +205,7 @@ PyArrow's C++ Parquet reader decrypts **all** column data during any read (even 
 
 ### Role Definitions
 
-| Role | PCI Key (`pwe-hackathon-pci-key`) | PII Key (`pwe-hackathon-pii-key`) | Footer Key | Result |
+| Role | PCI Key (`pme-hackathon-pci-key`) | PII Key (`pme-hackathon-pii-key`) | Footer Key | Result |
 |------|--------------------------------------|--------------------------------------|------------|--------|
 | **Fraud Analyst** | Allowed | Allowed | Allowed | All columns with data |
 | **Marketing Analyst** | **Denied** | Allowed | Allowed | PCI columns → null, rest with data |
@@ -255,7 +255,7 @@ from pme.src.decryption import read_with_partial_access
 # Service reads with full access, applies role-based masking
 table = read_with_partial_access(
     path, config, full_access_factory,
-    denied_key_aliases=frozenset({"pwe-hackathon-pci-key"}),  # marketing role
+    denied_key_aliases=frozenset({"pme-hackathon-pci-key"}),  # marketing role
 )
 # → ssn is null, everything else populated
 ```
@@ -269,8 +269,8 @@ Each role's IAM policy controls which KMS keys the **service** would consider de
     "Effect": "Allow",
     "Action": ["kms:Decrypt"],
     "Resource": [
-        "arn:aws:kms:us-east-2:651767347247:alias/pwe-hackathon-footer-key",
-        "arn:aws:kms:us-east-2:651767347247:alias/pwe-hackathon-pii-key"
+        "arn:aws:kms:us-east-2:651767347247:alias/pme-hackathon-footer-key",
+        "arn:aws:kms:us-east-2:651767347247:alias/pme-hackathon-pii-key"
     ]
 }
 ```

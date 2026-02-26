@@ -9,7 +9,7 @@ terraform {
   }
 
   backend "s3" {
-    bucket = "pwe-hackathon-tf-state-651767347247"
+    bucket = "pme-hackathon-tf-state-651767347247"
     key    = "infra/terraform.tfstate"
     region = "us-east-2"
   }

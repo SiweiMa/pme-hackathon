@@ -95,7 +95,7 @@ python inspect_encrypted.py <path-to-file.parquet>
 
 ```sql
 -- Use the federated connector catalog
-SELECT * FROM "pwe-hackathon-pme-connector"."pwe-hackathon-pme-db"."customer_data" LIMIT 10;
+SELECT * FROM "pme-hackathon-pme-connector"."pme-hackathon-pme-db"."customer_data" LIMIT 10;
 ```
 
 Switch IAM roles to see different column visibility per the RBAC matrix above.

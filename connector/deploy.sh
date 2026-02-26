@@ -18,8 +18,8 @@ set -euo pipefail
 
 AWS_REGION="${AWS_REGION:-us-east-2}"
 AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID:-651767347247}"
-ECR_REPO="pwe-hackathon-pme-connector"
-LAMBDA_FUNCTION="pwe-hackathon-pme-connector"
+ECR_REPO="pme-hackathon-pme-connector"
+LAMBDA_FUNCTION="pme-hackathon-pme-connector"
 IMAGE_NAME="${ECR_REPO}"
 ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
 

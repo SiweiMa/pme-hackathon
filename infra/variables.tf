@@ -12,7 +12,7 @@ variable "aws_account_id" {
 variable "project" {
   description = "Project name used for naming and tagging"
   type        = string
-  default     = "pwe-hackathon"
+  default     = "pme-hackathon"
 }
 
 variable "data_bucket_name" {
@@ -24,5 +24,5 @@ variable "data_bucket_name" {
 variable "state_bucket_name" {
   description = "S3 bucket for Terraform state (bootstrapped outside TF)"
   type        = string
-  default     = "pwe-hackathon-tf-state-651767347247"
+  default     = "pme-hackathon-tf-state-651767347247"
 }
