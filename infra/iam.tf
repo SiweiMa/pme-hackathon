@@ -250,6 +250,14 @@ resource "aws_iam_role" "athena_spark_execution" {
         Effect    = "Allow"
         Principal = { Service = "athena.amazonaws.com" }
         Action    = "sts:AssumeRole"
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = var.aws_account_id
+          }
+          ArnLike = {
+            "aws:SourceArn" = "arn:aws:athena:${var.aws_region}:${var.aws_account_id}:workgroup/pwe-hackathon-pme-*"
+          }
+        }
       }
     ]
   })
@@ -268,6 +276,7 @@ resource "aws_iam_role_policy" "athena_spark_s3" {
           "s3:GetObject",
           "s3:ListBucket",
           "s3:PutObject",
+          "s3:DeleteObject",
           "s3:GetBucketLocation",
         ]
         Resource = [
@@ -290,13 +299,22 @@ resource "aws_iam_role_policy" "athena_spark_athena" {
         Effect = "Allow"
         Action = [
           "athena:GetWorkGroup",
+          "athena:TerminateSession",
+          "athena:GetSession",
+          "athena:GetSessionStatus",
+          "athena:ListSessions",
           "athena:StartCalculationExecution",
-          "athena:GetCalculationExecution",
-          "athena:GetCalculationExecutionStatus",
+          "athena:GetCalculationExecutionCode",
           "athena:StopCalculationExecution",
           "athena:ListCalculationExecutions",
+          "athena:GetCalculationExecution",
+          "athena:GetCalculationExecutionStatus",
+          "athena:ListExecutors",
+          "athena:ExportNotebook",
+          "athena:UpdateNotebook",
+          "athena:CreatePresignedNotebookUrl",
         ]
-        Resource = "*"
+        Resource = "arn:aws:athena:${var.aws_region}:${var.aws_account_id}:workgroup/pwe-hackathon-pme-*"
       }
     ]
   })
@@ -339,9 +357,22 @@ resource "aws_iam_role_policy" "athena_spark_cloudwatch" {
         Action = [
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
+          "logs:DescribeLogStreams",
+          "logs:DescribeLogGroups",
           "logs:PutLogEvents",
         ]
         Resource = "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:*"
+      },
+      {
+        Sid    = "CloudWatchMetrics"
+        Effect = "Allow"
+        Action = ["cloudwatch:PutMetricData"]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "cloudwatch:namespace" = "AmazonAthenaForApacheSpark"
+          }
+        }
       }
     ]
   })
