@@ -2,13 +2,7 @@
 
 ## Overview
 
-This report shows the Parquet Modular Encryption (PME) pipeline running end-to-end on `Hackathon_customer_data.csv`. All output below is from an actual run of `pme/demo_read_pipeline.py`.
-
-To reproduce:
-
-```bash
-cd pme && python -m pme.demo_read_pipeline
-```
+This report shows the Parquet Modular Encryption (PME) pipeline running end-to-end on `Hackathon_customer_data.csv`. All output below is from an actual run against **real AWS KMS** keys in `us-east-2` (account `651767347247`).
 
 ---
 
@@ -41,9 +35,9 @@ first_name last_name         ssn                    email      xid  balance
 Each column is assigned a sensitivity tier, and each tier maps to a separate KMS CMK:
 
 ```
-Footer key alias: pme-footer-key
-PCI key alias: pme-pci-key  →  columns: ['ssn']
-PII key alias: pme-pii-key  →  columns: ['first_name', 'last_name', 'email']
+Footer key: pwe-hackathon-footer-key
+PCI key:    pwe-hackathon-pci-key  →  columns: ['ssn']
+PII key:    pwe-hackathon-pii-key  →  columns: ['first_name', 'last_name', 'email']
 Non-encrypted columns: ['xid', 'balance']
 Algorithm: AES_GCM_V1
 Plaintext footer: True
@@ -51,10 +45,10 @@ Plaintext footer: True
 
 | Column | Tier | KMS Key (alias) | Encrypted? |
 |--------|------|------------------|------------|
-| `ssn` | PCI | `pme-pci-key` | Yes |
-| `first_name` | PII | `pme-pii-key` | Yes |
-| `last_name` | PII | `pme-pii-key` | Yes |
-| `email` | PII | `pme-pii-key` | Yes |
+| `ssn` | PCI | `pwe-hackathon-pci-key` | Yes |
+| `first_name` | PII | `pwe-hackathon-pii-key` | Yes |
+| `last_name` | PII | `pwe-hackathon-pii-key` | Yes |
+| `email` | PII | `pwe-hackathon-pii-key` | Yes |
 | `xid` | Non-sensitive | — | No |
 | `balance` | Non-sensitive | — | No |
 
@@ -67,9 +61,9 @@ Plaintext footer: True
 ### Actual result
 
 ```
-Writing encrypted Parquet...
+Writing encrypted Parquet (real KMS)...
     File: customer_data_encrypted.parquet
-    Size: 8,774 bytes
+    Size: 9,700 bytes
     Magic bytes: b'PAR1' (plaintext footer)
 ```
 
@@ -81,9 +75,9 @@ Writing encrypted Parquet...
    - `DEK_footer` for the Parquet footer
 
 2. Each DEK is wrapped (encrypted) by KMS via `wrap_key(DEK, alias)`:
-   - `wrap_key(DEK_pci, "pme-pci-key")` → KMS returns encrypted blob
-   - `wrap_key(DEK_pii, "pme-pii-key")` → KMS returns encrypted blob
-   - `wrap_key(DEK_footer, "pme-footer-key")` → KMS returns encrypted blob
+   - `wrap_key(DEK_pci, "pwe-hackathon-pci-key")` → KMS returns encrypted blob
+   - `wrap_key(DEK_pii, "pwe-hackathon-pii-key")` → KMS returns encrypted blob
+   - `wrap_key(DEK_footer, "pwe-hackathon-footer-key")` → KMS returns encrypted blob
 
 3. Column data is encrypted locally with the plaintext DEKs (AES-GCM):
    - `ssn` bytes + `DEK_pci` → encrypted bytes
@@ -139,10 +133,10 @@ Attempting to read DATA without decryption keys...
 
 **Entry point:** `read_encrypted_parquet(path, config, kms_client_factory)`
 
-### Actual result — full access (fraud analyst role)
+### Actual result — full access (fraud analyst role, real KMS)
 
 ```
-Reading with FULL ACCESS (fraud analyst role)...
+Full access (fraud analyst)...
     Recovered 100 rows, 6 columns
     Data matches original: True
 
@@ -161,9 +155,9 @@ The decrypted data is **identical** to the original CSV input.
 
 1. PyArrow reads wrapped DEKs from the Parquet footer
 2. Each wrapped DEK is sent to KMS via `unwrap_key(wrapped_DEK, alias)`:
-   - `unwrap_key(wrapped_DEK_pci, "pme-pci-key")` → returns plaintext `DEK_pci`
-   - `unwrap_key(wrapped_DEK_pii, "pme-pii-key")` → returns plaintext `DEK_pii`
-   - `unwrap_key(wrapped_DEK_footer, "pme-footer-key")` → returns plaintext `DEK_footer`
+   - `unwrap_key(wrapped_DEK_pci, "pwe-hackathon-pci-key")` → returns plaintext `DEK_pci`
+   - `unwrap_key(wrapped_DEK_pii, "pwe-hackathon-pii-key")` → returns plaintext `DEK_pii`
+   - `unwrap_key(wrapped_DEK_footer, "pwe-hackathon-footer-key")` → returns plaintext `DEK_footer`
 3. Column data is decrypted locally with the plaintext DEKs (AES-GCM)
 4. Full PyArrow Table is returned
 
@@ -211,8 +205,8 @@ PyArrow's C++ Parquet reader decrypts **all** column data during any read (even 
 
 ### Role Definitions
 
-| Role | PCI Key (`pme-pci-key`) | PII Key (`pme-pii-key`) | Footer Key | Result |
-|------|-------------------------|-------------------------|------------|--------|
+| Role | PCI Key (`pwe-hackathon-pci-key`) | PII Key (`pwe-hackathon-pii-key`) | Footer Key | Result |
+|------|--------------------------------------|--------------------------------------|------------|--------|
 | **Fraud Analyst** | Allowed | Allowed | Allowed | All columns with data |
 | **Marketing Analyst** | **Denied** | Allowed | Allowed | PCI columns → null, rest with data |
 | **Junior Analyst** | **Denied** | **Denied** | Allowed | PCI+PII columns → null, non-sensitive with data |
@@ -220,9 +214,9 @@ PyArrow's C++ Parquet reader decrypts **all** column data during any read (even 
 ### Actual result — Marketing Analyst (PCI denied → ssn nulled)
 
 ```
-RBAC: Marketing analyst (PCI key DENIED → ssn nulled)...
+RBAC: Marketing analyst (PCI denied -> ssn nulled)...
     Recovered 100 rows, 6 columns
-    Nulled columns (PCI): ['ssn']
+    Nulled columns (PCI): ["ssn"]
 
     First 5 rows:
 first_name last_name  ssn                    email      xid  balance
@@ -238,9 +232,9 @@ The marketing analyst sees PII (names, email) and non-sensitive columns (xid, ba
 ### Actual result — Junior Analyst (PCI + PII denied → 4 columns nulled)
 
 ```
-RBAC: Junior analyst (PCI + PII keys DENIED → nulled)...
+RBAC: Junior analyst (PCI + PII denied -> nulled)...
     Recovered 100 rows, 6 columns
-    Nulled columns (PCI+PII): ['ssn', 'first_name', 'last_name', 'email']
+    Nulled columns (PCI+PII): ["ssn", "first_name", "last_name", "email"]
 
     First 5 rows:
 first_name last_name  ssn email      xid  balance
@@ -261,7 +255,7 @@ from pme.src.decryption import read_with_partial_access
 # Service reads with full access, applies role-based masking
 table = read_with_partial_access(
     path, config, full_access_factory,
-    denied_key_aliases=frozenset({"pme-pci-key"}),  # marketing role
+    denied_key_aliases=frozenset({"pwe-hackathon-pci-key"}),  # marketing role
 )
 # → ssn is null, everything else populated
 ```
@@ -299,8 +293,8 @@ Encrypted footer mode (plaintext_footer=False)...
 
 | Footer Mode | Magic Bytes | Schema without keys | File size |
 |-------------|-------------|---------------------|-----------|
-| `plaintext_footer=True` | `PAR1` | Readable | 8,774 bytes |
-| `plaintext_footer=False` | `PARE` | Not readable | 8,589 bytes |
+| `plaintext_footer=True` | `PAR1` | Readable | 9,700 bytes |
+| `plaintext_footer=False` | `PARE` | Not readable | 9,515 bytes |
 
 ---
 
@@ -309,9 +303,9 @@ Encrypted footer mode (plaintext_footer=False)...
 | Property | Status |
 |----------|--------|
 | Column data encrypted at rest (AES-GCM) | Yes |
-| DEKs encrypted by AWS KMS (envelope encryption) | Yes |
+| DEKs encrypted by AWS KMS (envelope encryption) | Yes — verified with real KMS |
 | Plaintext DEKs never written to disk | Yes |
-| Different KMS keys per sensitivity tier | Yes |
+| Different KMS keys per sensitivity tier | Yes (3 CMKs in us-east-2) |
 | Access controlled via IAM `kms:Decrypt` grants | Yes |
 | Partial access (denied columns → null) | Yes — application-level masking |
 | Schema discoverable without keys (plaintext footer) | Configurable |
