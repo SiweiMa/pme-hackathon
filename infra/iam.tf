@@ -23,7 +23,7 @@ locals {
 # =============================================================================
 
 resource "aws_iam_role" "fraud_analyst" {
-  name               = "pwe-hackathon-fraud-analyst"
+  name               = "pme-hackathon-fraud-analyst"
   assume_role_policy = local.trust_policy
 }
 
@@ -118,7 +118,7 @@ locals {
         Sid    = "LambdaInvokeConnector"
         Effect = "Allow"
         Action = "lambda:InvokeFunction"
-        Resource = "arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:function:pwe-hackathon-pme-connector"
+        Resource = "arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:function:pme-hackathon-pme-connector"
       },
       {
         Sid    = "S3SpillBucketAccess"
@@ -130,8 +130,8 @@ locals {
           "s3:GetBucketLocation",
         ]
         Resource = [
-          "arn:aws:s3:::pwe-hackathon-athena-spill-${var.aws_account_id}",
-          "arn:aws:s3:::pwe-hackathon-athena-spill-${var.aws_account_id}/*",
+          "arn:aws:s3:::pme-hackathon-athena-spill-${var.aws_account_id}",
+          "arn:aws:s3:::pme-hackathon-athena-spill-${var.aws_account_id}/*",
         ]
       },
     ]
@@ -161,7 +161,7 @@ resource "aws_iam_role_policy" "junior_analyst_athena" {
 # =============================================================================
 
 resource "aws_iam_role" "marketing_analyst" {
-  name               = "pwe-hackathon-marketing-analyst"
+  name               = "pme-hackathon-marketing-analyst"
   assume_role_policy = local.trust_policy
 }
 
@@ -215,7 +215,7 @@ resource "aws_iam_role_policy" "marketing_analyst_s3" {
 # =============================================================================
 
 resource "aws_iam_role" "junior_analyst" {
-  name               = "pwe-hackathon-junior-analyst"
+  name               = "pme-hackathon-junior-analyst"
   assume_role_policy = local.trust_policy
 }
 
@@ -268,7 +268,7 @@ resource "aws_iam_role_policy" "junior_analyst_s3" {
 # =============================================================================
 
 resource "aws_iam_role" "write_role" {
-  name               = "pwe-hackathon-write-role"
+  name               = "pme-hackathon-write-role"
   assume_role_policy = local.trust_policy
 }
 
@@ -325,7 +325,7 @@ resource "aws_iam_role_policy" "write_role_s3" {
 # =============================================================================
 
 resource "aws_iam_role" "athena_spark_execution" {
-  name = "pwe-hackathon-athena-spark-execution"
+  name = "pme-hackathon-athena-spark-execution"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -338,7 +338,7 @@ resource "aws_iam_role" "athena_spark_execution" {
             "aws:SourceAccount" = var.aws_account_id
           }
           ArnLike = {
-            "aws:SourceArn" = "arn:aws:athena:${var.aws_region}:${var.aws_account_id}:workgroup/pwe-hackathon-pme-*"
+            "aws:SourceArn" = "arn:aws:athena:${var.aws_region}:${var.aws_account_id}:workgroup/pme-hackathon-pme-*"
           }
         }
       }
@@ -397,7 +397,7 @@ resource "aws_iam_role_policy" "athena_spark_athena" {
           "athena:UpdateNotebook",
           "athena:CreatePresignedNotebookUrl",
         ]
-        Resource = "arn:aws:athena:${var.aws_region}:${var.aws_account_id}:workgroup/pwe-hackathon-pme-*"
+        Resource = "arn:aws:athena:${var.aws_region}:${var.aws_account_id}:workgroup/pme-hackathon-pme-*"
       }
     ]
   })
@@ -466,7 +466,7 @@ resource "aws_iam_role_policy" "athena_spark_cloudwatch" {
 # =============================================================================
 
 resource "aws_iam_user" "console_user" {
-  name = "pwe-hackathon-console-user"
+  name = "pme-hackathon-console-user"
 }
 
 resource "aws_iam_user_login_profile" "console_user" {

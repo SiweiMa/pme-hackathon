@@ -20,7 +20,7 @@ env:
   TF_VERSION: "1.9.6"
   TF_WORKING_DIR: infra
   AWS_REGION: us-east-2
-  STATE_BUCKET: pwe-hackathon-tf-state-651767347247
+  STATE_BUCKET: pme-hackathon-tf-state-651767347247
 
 permissions:
   contents: read
@@ -54,7 +54,7 @@ jobs:
             aws s3api put-bucket-versioning --bucket "$STATE_BUCKET" \
               --versioning-configuration Status=Enabled
             aws s3api put-bucket-tagging --bucket "$STATE_BUCKET" \
-              --tagging 'TagSet=[{Key=Project,Value=pwe-hackathon},{Key=ManagedBy,Value=terraform}]'
+              --tagging 'TagSet=[{Key=Project,Value=pme-hackathon},{Key=ManagedBy,Value=terraform}]'
             aws s3api put-public-access-block --bucket "$STATE_BUCKET" \
               --public-access-block-configuration \
               BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
@@ -138,7 +138,7 @@ jobs:
             aws s3api put-bucket-versioning --bucket "$STATE_BUCKET" \
               --versioning-configuration Status=Enabled
             aws s3api put-bucket-tagging --bucket "$STATE_BUCKET" \
-              --tagging 'TagSet=[{Key=Project,Value=pwe-hackathon},{Key=ManagedBy,Value=terraform}]'
+              --tagging 'TagSet=[{Key=Project,Value=pme-hackathon},{Key=ManagedBy,Value=terraform}]'
             aws s3api put-public-access-block --bucket "$STATE_BUCKET" \
               --public-access-block-configuration \
               BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true

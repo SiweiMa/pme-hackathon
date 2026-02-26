@@ -224,13 +224,13 @@ Sample data is provided in `Hackathon_customer_data.csv` (columns: `first_name`,
 
 All infrastructure is deployed in `us-east-2` (account `651767347247`):
 
-- 3 KMS CMKs: `alias/pwe-hackathon-footer-key`, `alias/pwe-hackathon-pci-key`, `alias/pwe-hackathon-pii-key`.
-- 4 IAM RBAC Roles: `pwe-hackathon-fraud-analyst`, `pwe-hackathon-marketing-analyst`, `pwe-hackathon-junior-analyst`, `pwe-hackathon-write-role`.
-- 1 Lambda execution role: `pwe-hackathon-lambda-pme-encrypt` (KMS encrypt/decrypt + S3 read/write + CloudWatch logs).
+- 3 KMS CMKs: `alias/pme-hackathon-footer-key`, `alias/pme-hackathon-pci-key`, `alias/pme-hackathon-pii-key`.
+- 4 IAM RBAC Roles: `pme-hackathon-fraud-analyst`, `pme-hackathon-marketing-analyst`, `pme-hackathon-junior-analyst`, `pme-hackathon-write-role`.
+- 1 Lambda execution role: `pme-hackathon-lambda-pme-encrypt` (KMS encrypt/decrypt + S3 read/write + CloudWatch logs).
 - 1 S3 Bucket: `pwe-hackathon-pme-data-651767347247` with `pme-data/` prefix.
-- 1 ECR Repository: `pwe-hackathon-pme-lambda`.
-- 1 Lambda Function (container image): `pwe-hackathon-pme-encrypt` (1536 MB, 300s timeout).
-- 1 CloudWatch log group: `/aws/lambda/pwe-hackathon-pme-encrypt` (7-day retention).
+- 1 ECR Repository: `pme-hackathon-pme-lambda`.
+- 1 Lambda Function (container image): `pme-hackathon-pme-encrypt` (1536 MB, 300s timeout).
+- 1 CloudWatch log group: `/aws/lambda/pme-hackathon-pme-encrypt` (7-day retention).
 
 **Remaining infra (for read path) to be added:**
   - Lambda Federated Connector (decryption proxy for Athena SQL).
@@ -262,7 +262,7 @@ All infrastructure is deployed in `us-east-2` (account `651767347247`):
 **Test results:**
 
 ```
-$ aws lambda invoke --function-name pwe-hackathon-pme-encrypt --payload '{}' /dev/stdout
+$ aws lambda invoke --function-name pme-hackathon-pme-encrypt --payload '{}' /dev/stdout
 {"statusCode": 200, "body": {"output_s3_uri": "s3://pwe-hackathon-pme-data-651767347247/pme-data/customer_data_encrypted.parquet", "rows_encrypted": 100, "columns_encrypted": ["ssn", "first_name", "last_name", "email"]}}
 ```
 
@@ -342,9 +342,9 @@ Deploy **1 Lambda Federated Connector** and **1 Athena SQL view**. The connector
 
 | IAM Role | Footer Key | PCI Key | PII Key | Column Visibility |
 |----------|:----------:|:-------:|:-------:|-------------------|
-| `pwe-hackathon-fraud-analyst` | Decrypt | Decrypt | Decrypt | All columns visible |
-| `pwe-hackathon-marketing-analyst` | Decrypt | DENY | Decrypt | PCI = NULL |
-| `pwe-hackathon-junior-analyst` | Decrypt | DENY | DENY | PCI + PII = NULL |
+| `pme-hackathon-fraud-analyst` | Decrypt | Decrypt | Decrypt | All columns visible |
+| `pme-hackathon-marketing-analyst` | Decrypt | DENY | Decrypt | PCI = NULL |
+| `pme-hackathon-junior-analyst` | Decrypt | DENY | DENY | PCI + PII = NULL |
 
 **Single view — all roles query the same view:**
 
@@ -388,7 +388,7 @@ Same encrypted file on S3, same connector, same view — the caller's IAM role d
 | File is encrypted | First 4 bytes = `PAR1` (plaintext footer, columns encrypted) | DONE |
 | Roundtrip integrity | encrypt → decrypt → `assert table.equals(original)` | DONE |
 | RBAC works locally | Assume each role → verify column visibility | DONE |
-| Lambda encrypt works | `aws lambda invoke --function-name pwe-hackathon-pme-encrypt --payload '{}'` → 100 rows encrypted to S3 | DONE |
+| Lambda encrypt works | `aws lambda invoke --function-name pme-hackathon-pme-encrypt --payload '{}'` → 100 rows encrypted to S3 | DONE |
 | Glue table registered | Table visible in Glue Data Catalog pointing to S3 PME path | TODO |
 | Federated connector deployed | Lambda connector can read and decrypt PME files in memory | TODO |
 | Athena SQL view works | `SELECT * FROM "pme_decrypted_view"` returns decrypted rows | TODO |

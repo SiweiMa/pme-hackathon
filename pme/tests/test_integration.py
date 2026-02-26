@@ -2,7 +2,7 @@
 
 These tests require:
     - Valid AWS credentials (via env vars or /tmp/credentials)
-    - KMS keys: alias/pwe-hackathon-{footer,pci,pii}-key in us-east-2
+    - KMS keys: alias/pme-hackathon-{footer,pci,pii}-key in us-east-2
     - S3 bucket: pwe-hackathon-pme-data-651767347247 in us-east-2
 
 Run with:  python -m pytest tests/test_integration.py -v -m integration
@@ -46,9 +46,9 @@ from pme.src.kms_client import AwsKmsClientFactory
 AWS_REGION = "us-east-2"
 ACCOUNT_ID = "651767347247"
 
-FOOTER_KEY_ARN = f"arn:aws:kms:{AWS_REGION}:{ACCOUNT_ID}:alias/pwe-hackathon-footer-key"
-PCI_KEY_ARN = f"arn:aws:kms:{AWS_REGION}:{ACCOUNT_ID}:alias/pwe-hackathon-pci-key"
-PII_KEY_ARN = f"arn:aws:kms:{AWS_REGION}:{ACCOUNT_ID}:alias/pwe-hackathon-pii-key"
+FOOTER_KEY_ARN = f"arn:aws:kms:{AWS_REGION}:{ACCOUNT_ID}:alias/pme-hackathon-footer-key"
+PCI_KEY_ARN = f"arn:aws:kms:{AWS_REGION}:{ACCOUNT_ID}:alias/pme-hackathon-pci-key"
+PII_KEY_ARN = f"arn:aws:kms:{AWS_REGION}:{ACCOUNT_ID}:alias/pme-hackathon-pii-key"
 
 S3_BUCKET = f"pwe-hackathon-pme-data-{ACCOUNT_ID}"
 S3_PREFIX = "pme-data"
@@ -83,20 +83,20 @@ def _build_real_config(
     """Build PmeConfig using real AWS KMS ARNs and sample CSV columns."""
     return PmeConfig(
         footer_key=KmsKeyConfig(
-            key_arn=FOOTER_KEY_ARN, alias="pwe-hackathon-footer-key"
+            key_arn=FOOTER_KEY_ARN, alias="pme-hackathon-footer-key"
         ),
         column_groups=[
             ColumnGroupConfig(
                 name="pci",
                 kms_key=KmsKeyConfig(
-                    key_arn=PCI_KEY_ARN, alias="pwe-hackathon-pci-key"
+                    key_arn=PCI_KEY_ARN, alias="pme-hackathon-pci-key"
                 ),
                 columns=["ssn"],
             ),
             ColumnGroupConfig(
                 name="pii",
                 kms_key=KmsKeyConfig(
-                    key_arn=PII_KEY_ARN, alias="pwe-hackathon-pii-key"
+                    key_arn=PII_KEY_ARN, alias="pme-hackathon-pii-key"
                 ),
                 columns=["first_name", "last_name", "email"],
             ),

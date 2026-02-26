@@ -50,14 +50,14 @@ def _build_config(s3_prefix: str) -> PmeConfig:
     return PmeConfig(
         footer_key=KmsKeyConfig(
             key_arn=FOOTER_KEY_ARN,
-            alias="pwe-hackathon-footer-key",
+            alias="pme-hackathon-footer-key",
         ),
         column_groups=[
             ColumnGroupConfig(
                 name="pci",
                 kms_key=KmsKeyConfig(
                     key_arn=PCI_KEY_ARN,
-                    alias="pwe-hackathon-pci-key",
+                    alias="pme-hackathon-pci-key",
                 ),
                 columns=["ssn"],
             ),
@@ -65,7 +65,7 @@ def _build_config(s3_prefix: str) -> PmeConfig:
                 name="pii",
                 kms_key=KmsKeyConfig(
                     key_arn=PII_KEY_ARN,
-                    alias="pwe-hackathon-pii-key",
+                    alias="pme-hackathon-pii-key",
                 ),
                 columns=["first_name", "last_name", "email"],
             ),

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# deploy.sh — Build, push, and update the PME Lambda container image.
+# deploy.sh — Build, push, and update the Snowflake External Function Lambda image.
 #
 # Usage:
-#   ./lambda/deploy.sh          (run from repo root)
+#   ./snowflake/deploy.sh          (run from repo root)
 #
 # Prerequisites:
 #   - Docker running
 #   - AWS CLI configured with credentials
-#   - ECR repository created via Terraform (infra/lambda.tf)
-#   - Lambda function created via Terraform (infra/lambda.tf)
+#   - ECR repository created via Terraform (infra/snowflake.tf)
+#   - Lambda function created via Terraform (infra/snowflake.tf)
 
 set -euo pipefail
 
@@ -18,15 +18,15 @@ set -euo pipefail
 
 AWS_REGION="${AWS_REGION:-us-east-2}"
 AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID:-651767347247}"
-ECR_REPO="pme-hackathon-pme-lambda"
-LAMBDA_FUNCTION="pme-hackathon-pme-encrypt"
+ECR_REPO="pme-hackathon-sf-decrypt"
+LAMBDA_FUNCTION="pme-hackathon-sf-decrypt"
 IMAGE_NAME="${ECR_REPO}"
 ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
 
 # Tag with git short SHA for traceability
 GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
-echo "=== PME Lambda Deploy ==="
+echo "=== Snowflake External Function Deploy ==="
 echo "Region:   ${AWS_REGION}"
 echo "Account:  ${AWS_ACCOUNT_ID}"
 echo "ECR:      ${ECR_URI}"
@@ -51,7 +51,7 @@ echo ">>> Building container image..."
 docker build \
   --platform linux/amd64 \
   --provenance=false \
-  -f lambda/Dockerfile \
+  -f snowflake/Dockerfile \
   -t "${IMAGE_NAME}:${GIT_SHA}" \
   -t "${IMAGE_NAME}:latest" \
   .

@@ -22,23 +22,23 @@ ACCT = "651767347247"
 
 CONFIG = PmeConfig(
     footer_key=KmsKeyConfig(
-        key_arn=f"arn:aws:kms:{REGION}:{ACCT}:alias/pwe-hackathon-footer-key",
-        alias="pwe-hackathon-footer-key",
+        key_arn=f"arn:aws:kms:{REGION}:{ACCT}:alias/pme-hackathon-footer-key",
+        alias="pme-hackathon-footer-key",
     ),
     column_groups=[
         ColumnGroupConfig(
             name="pci",
             kms_key=KmsKeyConfig(
-                key_arn=f"arn:aws:kms:{REGION}:{ACCT}:alias/pwe-hackathon-pci-key",
-                alias="pwe-hackathon-pci-key",
+                key_arn=f"arn:aws:kms:{REGION}:{ACCT}:alias/pme-hackathon-pci-key",
+                alias="pme-hackathon-pci-key",
             ),
             columns=["ssn"],
         ),
         ColumnGroupConfig(
             name="pii",
             kms_key=KmsKeyConfig(
-                key_arn=f"arn:aws:kms:{REGION}:{ACCT}:alias/pwe-hackathon-pii-key",
-                alias="pwe-hackathon-pii-key",
+                key_arn=f"arn:aws:kms:{REGION}:{ACCT}:alias/pme-hackathon-pii-key",
+                alias="pme-hackathon-pii-key",
             ),
             columns=["first_name", "last_name", "email"],
         ),

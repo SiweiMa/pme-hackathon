@@ -29,7 +29,7 @@ resource "aws_kms_key" "footer" {
 }
 
 resource "aws_kms_alias" "footer" {
-  name          = "alias/pwe-hackathon-footer-key"
+  name          = "alias/pme-hackathon-footer-key"
   target_key_id = aws_kms_key.footer.key_id
 }
 
@@ -42,7 +42,7 @@ resource "aws_kms_key" "pci" {
 }
 
 resource "aws_kms_alias" "pci" {
-  name          = "alias/pwe-hackathon-pci-key"
+  name          = "alias/pme-hackathon-pci-key"
   target_key_id = aws_kms_key.pci.key_id
 }
 
@@ -55,6 +55,6 @@ resource "aws_kms_key" "pii" {
 }
 
 resource "aws_kms_alias" "pii" {
-  name          = "alias/pwe-hackathon-pii-key"
+  name          = "alias/pme-hackathon-pii-key"
   target_key_id = aws_kms_key.pii.key_id
 }

@@ -14,7 +14,7 @@
 # --- ECR repository -----------------------------------------------------------
 
 resource "aws_ecr_repository" "pme_connector" {
-  name                 = "pwe-hackathon-pme-connector"
+  name                 = "pme-hackathon-pme-connector"
   image_tag_mutability = "MUTABLE"
   force_delete         = true
 }
@@ -42,14 +42,14 @@ resource "aws_ecr_lifecycle_policy" "pme_connector" {
 # --- CloudWatch log group -----------------------------------------------------
 
 resource "aws_cloudwatch_log_group" "pme_connector" {
-  name              = "/aws/lambda/pwe-hackathon-pme-connector"
+  name              = "/aws/lambda/pme-hackathon-pme-connector"
   retention_in_days = 7
 }
 
 # --- S3 spill bucket (required by Athena Federation) --------------------------
 
 resource "aws_s3_bucket" "athena_spill" {
-  bucket = "pwe-hackathon-athena-spill-${var.aws_account_id}"
+  bucket = "pme-hackathon-athena-spill-${var.aws_account_id}"
 }
 
 resource "aws_s3_bucket_lifecycle_configuration" "athena_spill" {
@@ -79,7 +79,7 @@ resource "aws_s3_bucket_public_access_block" "athena_spill" {
 # --- IAM execution role -------------------------------------------------------
 
 resource "aws_iam_role" "lambda_pme_connector" {
-  name = "pwe-hackathon-lambda-pme-connector"
+  name = "pme-hackathon-lambda-pme-connector"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -210,7 +210,7 @@ resource "aws_iam_role_policy" "connector_glue" {
 # --- Lambda function ----------------------------------------------------------
 
 resource "aws_lambda_function" "pme_connector" {
-  function_name = "pwe-hackathon-pme-connector"
+  function_name = "pme-hackathon-pme-connector"
   role          = aws_iam_role.lambda_pme_connector.arn
   package_type  = "Image"
   image_uri     = "${aws_ecr_repository.pme_connector.repository_url}:latest"
@@ -251,7 +251,7 @@ resource "aws_lambda_permission" "athena_invoke" {
 # --- Athena data catalog (LAMBDA type) ----------------------------------------
 
 resource "aws_athena_data_catalog" "pme_connector" {
-  name        = "pwe-hackathon-pme-connector"
+  name        = "pme-hackathon-pme-connector"
   description = "Federated connector for PME-encrypted customer data with RBAC"
   type        = "LAMBDA"
 
@@ -263,7 +263,8 @@ resource "aws_athena_data_catalog" "pme_connector" {
 # --- Athena SQL workgroup for federated queries ------------------------------
 
 resource "aws_athena_workgroup" "federated" {
-  name = "pwe-hackathon-pme-federated"
+  name          = "pme-hackathon-pme-federated"
+  force_destroy = true
 
   configuration {
     result_configuration {

@@ -56,7 +56,7 @@ Athena                              Lambda
   │◄── PingResponse ◄─────────────────┤
   │                                    │
   ├── ListSchemasRequest ──────────► what databases?
-  │◄── ["pwe-hackathon-pme-db"] ◄─────┤
+  │◄── ["pme-hackathon-pme-db"] ◄─────┤
   │                                    │
   ├── ListTablesRequest ───────────► what tables?
   │◄── [{"schemaName":..,"tableName":"customer_data"}] ◄──┤
@@ -81,7 +81,7 @@ Athena                              Lambda
 | Request | Lambda Response | Purpose |
 |---------|----------------|---------|
 | `PingRequest` | capabilities + source type | Health check, connector discovery |
-| `ListSchemasRequest` | `["pwe-hackathon-pme-db"]` | Enumerate available databases |
+| `ListSchemasRequest` | `["pme-hackathon-pme-db"]` | Enumerate available databases |
 | `ListTablesRequest` | `[{schemaName, tableName}]` | Enumerate tables in a database |
 | `GetTableRequest` | Arrow schema (Base64) | Column names and types |
 | `GetTableLayoutRequest` | Partition info (Arrow block) | How data is partitioned |
@@ -156,9 +156,9 @@ Parquet File
 ```
 
 Three KMS keys control access:
-- **Footer key** (`pwe-hackathon-footer-key`): Required to read any column metadata
-- **PCI key** (`pwe-hackathon-pci-key`): Encrypts `ssn`
-- **PII key** (`pwe-hackathon-pii-key`): Encrypts `first_name`, `last_name`, `email`
+- **Footer key** (`pme-hackathon-footer-key`): Required to read any column metadata
+- **PCI key** (`pme-hackathon-pci-key`): Encrypts `ssn`
+- **PII key** (`pme-hackathon-pii-key`): Encrypts `first_name`, `last_name`, `email`
 
 Columns `xid` and `balance` are not encrypted (they're non-sensitive).
 
@@ -193,13 +193,13 @@ Since PyArrow must decrypt everything, RBAC is enforced **after** decryption:
 # Step 1: Decrypt with full access (Lambda role has all 3 KMS keys)
 table = read_with_partial_access(
     local_path, config, factory,
-    denied_key_aliases={"pwe-hackathon-pci-key"},  # marketing analyst
+    denied_key_aliases={"pme-hackathon-pci-key"},  # marketing analyst
 )
 
 # Inside read_with_partial_access:
 #   1. read_encrypted_parquet() → full decrypt → all columns visible
 #   2. Find columns encrypted by denied keys:
-#      "pwe-hackathon-pci-key" → ["ssn"]
+#      "pme-hackathon-pci-key" → ["ssn"]
 #   3. Replace those columns with null arrays:
 #      table = table.set_column(idx, "ssn", pa.nulls(100, pa.string()))
 ```
@@ -214,16 +214,16 @@ The caller's IAM ARN is extracted from the Athena federation request's `identity
 # From the event payload:
 identity = event.get("identity", {})
 caller_arn = identity.get("arn", "")
-# → "arn:aws:sts::651767347247:assumed-role/pwe-hackathon-fraud-analyst/session"
+# → "arn:aws:sts::651767347247:assumed-role/pme-hackathon-fraud-analyst/session"
 ```
 
 This ARN is matched against a static mapping:
 
 | Caller ARN contains | Denied KMS Keys | Nulled Columns |
 |---------------------|-----------------|----------------|
-| `pwe-hackathon-fraud-analyst` | (none) | (none) |
-| `pwe-hackathon-marketing-analyst` | PCI key | `ssn` |
-| `pwe-hackathon-junior-analyst` | PCI + PII keys | `ssn`, `first_name`, `last_name`, `email` |
+| `pme-hackathon-fraud-analyst` | (none) | (none) |
+| `pme-hackathon-marketing-analyst` | PCI key | `ssn` |
+| `pme-hackathon-junior-analyst` | PCI + PII keys | `ssn`, `first_name`, `last_name`, `email` |
 | (unknown caller) | PCI + PII keys | `ssn`, `first_name`, `last_name`, `email` |
 
 ## Request Lifecycle: Full `ReadRecordsRequest` Walkthrough
@@ -231,7 +231,7 @@ This ARN is matched against a static mapping:
 This is what happens end-to-end when a fraud analyst runs:
 
 ```sql
-SELECT * FROM "pwe-hackathon-pme-connector"."pwe-hackathon-pme-db"."customer_data" LIMIT 10;
+SELECT * FROM "pme-hackathon-pme-connector"."pme-hackathon-pme-db"."customer_data" LIMIT 10;
 ```
 
 ### 1. Athena Invokes Lambda
@@ -241,9 +241,9 @@ Athena sends a JSON payload to the Lambda:
 ```json
 {
   "@type": "ReadRecordsRequest",
-  "catalogName": "pwe-hackathon-pme-connector",
+  "catalogName": "pme-hackathon-pme-connector",
   "identity": {
-    "arn": "arn:aws:sts::651767347247:assumed-role/pwe-hackathon-fraud-analyst/session"
+    "arn": "arn:aws:sts::651767347247:assumed-role/pme-hackathon-fraud-analyst/session"
   },
   "split": {
     "properties": {
@@ -263,7 +263,7 @@ Athena sends a JSON payload to the Lambda:
 ### 3. RBAC Resolution
 
 ```python
-caller_arn = "arn:aws:sts::651767347247:assumed-role/pwe-hackathon-fraud-analyst/session"
+caller_arn = "arn:aws:sts::651767347247:assumed-role/pme-hackathon-fraud-analyst/session"
 denied_keys = denied_keys_for_caller(caller_arn)
 # → frozenset() (fraud analyst has full access)
 ```
@@ -280,7 +280,7 @@ s3.download_file("pwe-hackathon-pme-data-651767347247",
 
 ```python
 config = PmeConfig(
-    footer_key=KmsKeyConfig(key_arn="arn:aws:kms:...", alias="pwe-hackathon-footer-key"),
+    footer_key=KmsKeyConfig(key_arn="arn:aws:kms:...", alias="pme-hackathon-footer-key"),
     column_groups=[
         ColumnGroupConfig(name="pci", kms_key=..., columns=["ssn"]),
         ColumnGroupConfig(name="pii", kms_key=..., columns=["first_name", "last_name", "email"]),
@@ -304,7 +304,7 @@ table = read_with_partial_access(
 ```python
 response = {
     "@type": "ReadRecordsResponse",
-    "catalogName": "pwe-hackathon-pme-connector",
+    "catalogName": "pme-hackathon-pme-connector",
     "schema": {"schema": base64(schema.serialize().slice(4))},
     "records": {
         "aId": "a1b2c3d4-...",

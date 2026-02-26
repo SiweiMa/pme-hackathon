@@ -107,3 +107,24 @@ output "athena_spill_bucket" {
   description = "S3 bucket for Athena Federation spill data"
   value       = aws_s3_bucket.athena_spill.id
 }
+
+# Snowflake External Function
+output "sf_decrypt_ecr_repository_url" {
+  description = "ECR repository URL for the Snowflake decrypt Lambda image"
+  value       = aws_ecr_repository.sf_decrypt.repository_url
+}
+
+output "sf_decrypt_lambda_function_name" {
+  description = "Name of the Snowflake decrypt Lambda function"
+  value       = aws_lambda_function.sf_decrypt.function_name
+}
+
+output "sf_decrypt_api_gateway_invoke_url" {
+  description = "API Gateway invoke URL for Snowflake External Function (use in CREATE API INTEGRATION)"
+  value       = "${aws_api_gateway_stage.prod.invoke_url}/decrypt"
+}
+
+output "sf_snowflake_role_arn" {
+  description = "IAM role ARN for Snowflake to assume (use in CREATE API INTEGRATION)"
+  value       = aws_iam_role.snowflake_apigw.arn
+}
