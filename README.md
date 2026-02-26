@@ -50,15 +50,15 @@ Join:   Athena cross-catalog → PME customer_data (Lambda) JOIN Iceberg auth_da
   CSV upload to S3  ───►  │  Encrypt Lambda      │  ──► S3 (PME Parquet)
                           │  (PyArrow + 3 KMS)   │       │
                           └──────────────────────┘       │
-                                                          │
+                                                         │
   Athena SQL query  ───►  ┌──────────────────────┐       │
-                          │  Connector Lambda     │  ◄───┘
-                          │  (decrypt + RBAC)     │
-                          │  ┌────────────────┐   │
-                          │  │ caller identity │   │
-                          │  │ → denied keys   │   │
-                          │  │ → null masking  │   │
-                          │  └────────────────┘   │
+                          │  Connector Lambda    │  ◄────┘
+                          │  (decrypt + RBAC)    │
+                          │  ┌────────────────┐  │
+                          │  │ caller identity│  │
+                          │  │ → denied keys  │  │
+                          │  │ → null masking │  │
+                          │  └────────────────   │
                           └──────────────────────┘
                                     │
                           Arrow IPC (wire protocol)
