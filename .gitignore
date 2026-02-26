@@ -30,6 +30,7 @@ infra/*_override.tf.json
 
 # Project
 AWS_RESOURCES.md
+snowflake/run_iceberg_setup.py
 pme/output/
 
 # Worktrees
