@@ -81,3 +81,29 @@ output "glue_table_name" {
   description = "Glue catalog table for PME-encrypted customer data"
   value       = aws_glue_catalog_table.customer_data.name
 }
+
+# Federated Connector
+output "connector_ecr_repository_url" {
+  description = "ECR repository URL for the federated connector image"
+  value       = aws_ecr_repository.pme_connector.repository_url
+}
+
+output "connector_lambda_function_name" {
+  description = "Name of the federated connector Lambda function"
+  value       = aws_lambda_function.pme_connector.function_name
+}
+
+output "connector_lambda_function_arn" {
+  description = "ARN of the federated connector Lambda function"
+  value       = aws_lambda_function.pme_connector.arn
+}
+
+output "athena_data_catalog_name" {
+  description = "Athena data catalog for federated PME queries"
+  value       = aws_athena_data_catalog.pme_connector.name
+}
+
+output "athena_spill_bucket" {
+  description = "S3 bucket for Athena Federation spill data"
+  value       = aws_s3_bucket.athena_spill.id
+}
