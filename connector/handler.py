@@ -72,6 +72,8 @@ TABLE_SCHEMA = pa.schema([
     pa.field("balance", pa.float64()),
 ])
 
+TABLE_NAME_OBJ = {"schemaName": SCHEMA_NAME, "tableName": TABLE_NAME}
+
 
 # ---------------------------------------------------------------------------
 # Config builder (same pattern as lambda/handler.py)
@@ -116,18 +118,7 @@ def _build_config() -> PmeConfig:
 
 
 def _download_pme_file(s3_key: str) -> Path:
-    """Download PME Parquet file from S3 to Lambda ephemeral storage.
-
-    Parameters
-    ----------
-    s3_key : str
-        Full S3 object key (without bucket).
-
-    Returns
-    -------
-    Path
-        Local path to the downloaded file in /tmp.
-    """
+    """Download PME Parquet file from S3 to Lambda ephemeral storage."""
     s3 = boto3.client("s3")
     local_path = Path(tempfile.mktemp(suffix=".parquet", dir="/tmp"))
     logger.info("Downloading s3://%s/%s to %s", S3_BUCKET, s3_key, local_path)
@@ -155,26 +146,17 @@ def _handle_ping(event: dict) -> dict:
 
 def _handle_list_schemas(event: dict) -> dict:
     catalog = event.get("catalogName", CATALOG_NAME)
-    return list_schemas_response(catalog, "ListSchemasRequest", [SCHEMA_NAME])
+    return list_schemas_response(catalog, [SCHEMA_NAME])
 
 
 def _handle_list_tables(event: dict) -> dict:
     catalog = event.get("catalogName", CATALOG_NAME)
-    return list_tables_response(
-        catalog,
-        "ListTablesRequest",
-        [{"schemaName": SCHEMA_NAME, "tableName": TABLE_NAME}],
-    )
+    return list_tables_response(catalog, [TABLE_NAME_OBJ])
 
 
 def _handle_get_table(event: dict) -> dict:
     catalog = event.get("catalogName", CATALOG_NAME)
-    return get_table_response(
-        catalog,
-        "GetTableRequest",
-        {"schemaName": SCHEMA_NAME, "tableName": TABLE_NAME},
-        TABLE_SCHEMA,
-    )
+    return get_table_response(catalog, TABLE_NAME_OBJ, TABLE_SCHEMA)
 
 
 def _handle_get_table_layout(event: dict) -> dict:
@@ -182,7 +164,7 @@ def _handle_get_table_layout(event: dict) -> dict:
     # Single partition — no partitioning for 100 rows
     partition_schema = pa.schema([pa.field("partition_id", pa.int32())])
     partitions = pa.table({"partition_id": [0]}, schema=partition_schema)
-    return get_table_layout_response(catalog, "GetTableLayoutRequest", partitions)
+    return get_table_layout_response(catalog, TABLE_NAME_OBJ, partitions)
 
 
 def _handle_get_splits(event: dict) -> dict:
@@ -194,11 +176,15 @@ def _handle_get_splits(event: dict) -> dict:
             "key": SPILL_PREFIX,
             "directory": True,
         },
+        "encryptionKey": {
+            "key": "",
+            "nonce": "",
+        },
         "properties": {
             "s3_key": f"{S3_PREFIX}/customer_data_encrypted.parquet",
         },
     }
-    return get_splits_response(catalog, "GetSplitsRequest", [split])
+    return get_splits_response(catalog, [split])
 
 
 def _handle_read_records(event: dict) -> dict:
@@ -248,7 +234,7 @@ def _handle_read_records(event: dict) -> dict:
         )
 
         # 6. Serialize to Arrow block and return
-        return read_records_response(catalog, "ReadRecordsRequest", table)
+        return read_records_response(catalog, TABLE_SCHEMA, table)
 
     finally:
         # Clean up temp file
@@ -278,7 +264,10 @@ def lambda_handler(event, context):
     to the appropriate handler function.
     """
     request_type = event.get("@type", "")
-    logger.info("Federation request: %s", request_type)
+    logger.info("Federation request: %s | event keys: %s", request_type, list(event.keys()))
+    # Log full event for debugging (excluding large binary fields)
+    debug_event = {k: v for k, v in event.items() if k not in ("schema",)}
+    logger.info("Request payload: %s", json.dumps(debug_event, default=str)[:2000])
 
     handler = _HANDLERS.get(request_type)
     if handler is None:
@@ -289,5 +278,12 @@ def lambda_handler(event, context):
         }
 
     response = handler(event)
-    logger.info("Federation response type: %s", response.get("@type", "unknown"))
+    # Log response (truncate large base64 fields)
+    debug_resp = {}
+    for k, v in response.items():
+        if isinstance(v, str) and len(v) > 200:
+            debug_resp[k] = v[:100] + "...<truncated>"
+        else:
+            debug_resp[k] = v
+    logger.info("Response: %s", json.dumps(debug_resp, default=str)[:2000])
     return response

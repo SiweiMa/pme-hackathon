@@ -19,9 +19,14 @@ logger = logging.getLogger(__name__)
 PCI_KEY_ALIAS = "pwe-hackathon-pci-key"
 PII_KEY_ALIAS = "pwe-hackathon-pii-key"
 
-# Static mapping: role name substring → set of denied key aliases
+# Static mapping: role/user name substring → set of denied key aliases
 # Ordered from most-permissive to most-restrictive.
 _ROLE_DENIED_KEYS: list[tuple[str, frozenset[str]]] = [
+    # Admin / root / service user — full access
+    (":root", frozenset()),
+    ("hackathon-service", frozenset()),
+    ("AdministratorAccess", frozenset()),
+    # Analyst roles
     ("pwe-hackathon-fraud-analyst", frozenset()),
     ("pwe-hackathon-marketing-analyst", frozenset({PCI_KEY_ALIAS})),
     ("pwe-hackathon-junior-analyst", frozenset({PCI_KEY_ALIAS, PII_KEY_ALIAS})),
