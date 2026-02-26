@@ -127,7 +127,13 @@ RBAC is controlled by the caller's IAM role. The single Lambda connector receive
 │   ├── glue.tf                   # Glue Data Catalog table (PME metadata)
 │   ├── quicksight.tf             # QuickSight data source + Athena SQL view
 │   └── outputs.tf
-├── Hackathon_customer_data.csv   # Synthetic sample data (100 rows)
+├── data/
+│   ├── Hackathon_customer_data.csv   # Synthetic sample data (100 rows)
+│   └── Hackathon_customer_data_2.csv
+├── docs/
+│   ├── PME_IMPLEMENTATION_PLAN.md
+│   ├── ATHENA_DECRYPTION_GUIDE.md
+│   └── SPARK_PME_CHALLENGE.md
 └── README.md
 ```
 

@@ -75,7 +75,7 @@ CONFIG = PmeConfig(
     plaintext_footer=True,
 )
 
-CSV_PATH = Path(__file__).resolve().parents[1] / "Hackathon_customer_data.csv"
+CSV_PATH = Path(__file__).resolve().parents[1] / "data" / "Hackathon_customer_data.csv"
 LOCAL_OUTPUT = Path(__file__).resolve().parent / "output"
 
 

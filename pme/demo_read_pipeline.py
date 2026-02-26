@@ -32,7 +32,7 @@ from pme.tests.conftest import (
     InMemoryKmsClientFactory,
 )
 
-CSV_PATH = Path(__file__).resolve().parents[1] / "Hackathon_customer_data.csv"
+CSV_PATH = Path(__file__).resolve().parents[1] / "data" / "Hackathon_customer_data.csv"
 
 SEPARATOR = "=" * 72
 

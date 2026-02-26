@@ -46,7 +46,7 @@ AWS access is allowed, but existing resources are **off-limits**. Follow these r
 
 ## Data Handling
 
-- The CSV (`Hackathon_customer_data.csv`) contains **synthetic/fake** customer data for hackathon use only.
+- The CSV (`data/Hackathon_customer_data.csv`) contains **synthetic/fake** customer data for hackathon use only.
 - Never send this data to external APIs, LLMs, or third-party services.
 - Never commit real credentials, tokens, or secrets. Use `.env` files (gitignored) for any config.
 

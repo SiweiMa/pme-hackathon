@@ -102,4 +102,4 @@ Switch IAM roles to see different column visibility per the RBAC matrix above.
 
 ## Docs
 
-See [PME_IMPLEMENTATION_PLAN.md](PME_IMPLEMENTATION_PLAN.md) for full architecture, encryption flows, and phased plan.
+See [PME_IMPLEMENTATION_PLAN.md](docs/PME_IMPLEMENTATION_PLAN.md) for full architecture, encryption flows, and phased plan.
